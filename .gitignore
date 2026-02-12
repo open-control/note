@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+compile_commands.json
+Thumbs.db
+.DS_Store
