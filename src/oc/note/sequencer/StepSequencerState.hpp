@@ -19,11 +19,15 @@ using oc::state::Signal;
  */
 struct StepSequencerState {
     static constexpr uint8_t MAX_STEPS = 64;
+    static constexpr uint16_t MAX_GATE_PERCENT = 200;
 
     // Defaults (v0)
-    static constexpr uint8_t DEFAULT_LENGTH = 18;
-    static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 4;  // 1/16
+    static constexpr uint8_t DEFAULT_LENGTH = 8;
+    static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 2;  // 1/8
     static constexpr uint8_t DEFAULT_MIDI_CHANNEL_0BASED = 0;  // channel 1
+    static constexpr uint8_t DEFAULT_NOTE = 48;  // C3
+    static constexpr uint8_t DEFAULT_VELOCITY = 64;
+    static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
 
     StepSequencerState() { reset(); }
 
@@ -39,7 +43,7 @@ struct StepSequencerState {
     // Step properties (v0)
     std::array<uint8_t, MAX_STEPS> note{};       // MIDI note number 0..127
     std::array<uint8_t, MAX_STEPS> velocity{};   // 0..127 (0 is valid)
-    std::array<uint16_t, MAX_STEPS> gate{};      // percent (v0: 0..100; v1+: can exceed 100)
+    std::array<uint16_t, MAX_STEPS> gate{};      // percent (0..MAX_GATE_PERCENT)
     std::array<int8_t, MAX_STEPS> nudge{};       // -50..50 (not used by v0 engine)
 
     void reset() {
@@ -50,9 +54,9 @@ struct StepSequencerState {
         enabledMask.set(0);
 
         for (uint8_t i = 0; i < MAX_STEPS; ++i) {
-            note[i] = static_cast<uint8_t>(48 + (i % 12));  // C3..B3
-            velocity[i] = 100;
-            gate[i] = 75;
+            note[i] = DEFAULT_NOTE;
+            velocity[i] = DEFAULT_VELOCITY;
+            gate[i] = DEFAULT_GATE_PERCENT;
             nudge[i] = 0;
         }
     }
