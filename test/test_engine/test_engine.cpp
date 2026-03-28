@@ -104,8 +104,6 @@ void test_velocity_zero_is_sent() {
 }
 
 void test_note_off_follows_gate_percent() {
-    // PPQN=24, stepsPerBeat=4 => ticksPerStep=6.
-    // gate 50% => off at tick 3.
     StepSequencerState st;
     st.length.set(4);
     st.stepsPerBeat.set(4);
@@ -133,7 +131,6 @@ void test_note_off_follows_gate_percent() {
 }
 
 void test_boundary_order_note_off_before_next_step() {
-    // gate 100% schedules note-off at the step boundary.
     StepSequencerState st;
     st.length.set(2);
     st.stepsPerBeat.set(4);
@@ -150,6 +147,110 @@ void test_boundary_order_note_off_before_next_step() {
     StepSequencerEngine eng(st, out);
 
     eng.update(0, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[2].type));
+    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(62, out.events[2].note);
+}
+
+void test_positive_nudge_delays_note_on_and_note_off() {
+    StepSequencerState st;
+    st.length.set(2);
+    st.stepsPerBeat.set(4);
+    st.midiChannel.set(0);
+    st.enabledMask.set(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 50;
+    st.nudge[0] = 50;
+
+    MockOutput out;
+    StepSequencerEngine eng(st, out);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+
+    eng.update(2, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+
+    eng.update(3, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
+
+    eng.update(5, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
+}
+
+void test_negative_nudge_triggers_before_quantized_boundary() {
+    StepSequencerState st;
+    st.length.set(2);
+    st.stepsPerBeat.set(4);
+    st.midiChannel.set(0);
+    st.enabledMask.set(1ULL << 1);
+    st.note[1] = 62;
+    st.velocity[1] = 100;
+    st.gate[1] = 50;
+    st.nudge[1] = -50;
+
+    MockOutput out;
+    StepSequencerEngine eng(st, out);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+
+    eng.update(2, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+
+    eng.update(3, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(62, out.events[0].note);
+    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(62, out.events[1].note);
+    TEST_ASSERT_EQUAL(1, st.playheadStep.get());
+}
+
+void test_note_off_stays_before_next_note_on_when_nudged() {
+    StepSequencerState st;
+    st.length.set(2);
+    st.stepsPerBeat.set(4);
+    st.midiChannel.set(0);
+    st.enabledMask.set((1ULL << 0) | (1ULL << 1));
+    st.note[0] = 60;
+    st.note[1] = 62;
+    st.velocity[0] = 100;
+    st.velocity[1] = 100;
+    st.gate[0] = 50;
+    st.gate[1] = 50;
+    st.nudge[0] = 50;
+    st.nudge[1] = 0;
+
+    MockOutput out;
+    StepSequencerEngine eng(st, out);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+
+    eng.update(3, true);
     TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
     TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
     TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
@@ -194,6 +295,9 @@ int main() {
     RUN_TEST(test_velocity_zero_is_sent);
     RUN_TEST(test_note_off_follows_gate_percent);
     RUN_TEST(test_boundary_order_note_off_before_next_step);
+    RUN_TEST(test_positive_nudge_delays_note_on_and_note_off);
+    RUN_TEST(test_negative_nudge_triggers_before_quantized_boundary);
+    RUN_TEST(test_note_off_stays_before_next_note_on_when_nudged);
     RUN_TEST(test_stop_calls_all_notes_off_once);
     return UNITY_END();
 }

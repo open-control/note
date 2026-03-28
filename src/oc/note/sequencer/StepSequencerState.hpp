@@ -28,6 +28,7 @@ struct StepSequencerState {
     static constexpr uint8_t DEFAULT_NOTE = 48;  // C3
     static constexpr uint8_t DEFAULT_VELOCITY = 64;
     static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
+    static constexpr uint8_t DEFAULT_PROBABILITY = 100;
 
     StepSequencerState() { reset(); }
 
@@ -40,11 +41,21 @@ struct StepSequencerState {
     // Step enable flags
     Signal<uint64_t> enabledMask{0};
 
+    // Runtime probability resolution for the currently active cycle.
+    Signal<uint32_t> probabilityCycleRevision{0};
+    uint64_t probabilityCycleMask = 0;
+    uint32_t probabilityCycleIndex = 0;
+
     // Step properties (v0)
-    std::array<uint8_t, MAX_STEPS> note{};       // MIDI note number 0..127
-    std::array<uint8_t, MAX_STEPS> velocity{};   // 0..127 (0 is valid)
-    std::array<uint16_t, MAX_STEPS> gate{};      // percent (0..MAX_GATE_PERCENT)
-    std::array<int8_t, MAX_STEPS> nudge{};       // -50..50 (not used by v0 engine)
+    std::array<uint8_t, MAX_STEPS> note{};         // MIDI note number 0..127
+    std::array<uint8_t, MAX_STEPS> velocity{};     // 0..127 (0 is valid)
+    std::array<uint16_t, MAX_STEPS> gate{};        // percent (0..MAX_GATE_PERCENT)
+    std::array<int8_t, MAX_STEPS> nudge{};         // -50..50 (not used by v0 engine)
+    std::array<uint8_t, MAX_STEPS> probability{};  // percent 0..100
+
+    static uint8_t clampProbability(uint8_t value) {
+        return (value > 100U) ? 100U : value;
+    }
 
     void reset() {
         length.set(DEFAULT_LENGTH);
@@ -52,12 +63,16 @@ struct StepSequencerState {
         stepsPerBeat.set(DEFAULT_STEPS_PER_BEAT);
         midiChannel.set(DEFAULT_MIDI_CHANNEL_0BASED);
         enabledMask.set(0);
+        probabilityCycleMask = 0;
+        probabilityCycleIndex = 0;
+        probabilityCycleRevision.set(0);
 
         for (uint8_t i = 0; i < MAX_STEPS; ++i) {
             note[i] = DEFAULT_NOTE;
             velocity[i] = DEFAULT_VELOCITY;
             gate[i] = DEFAULT_GATE_PERCENT;
             nudge[i] = 0;
+            probability[i] = DEFAULT_PROBABILITY;
         }
     }
 
