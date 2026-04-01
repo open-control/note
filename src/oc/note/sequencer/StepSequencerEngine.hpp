@@ -7,7 +7,7 @@
 
 #include "ISequencerOutput.hpp"
 #include "NoteScheduler.hpp"
-#include "StepSequencerState.hpp"
+#include "StepSequencerRuntimeState.hpp"
 
 namespace oc::note::sequencer {
 
@@ -20,11 +20,12 @@ namespace oc::note::sequencer {
  */
 class StepSequencerEngine {
 public:
-    StepSequencerEngine(StepSequencerState& state, ISequencerOutput& output)
+    StepSequencerEngine(StepSequencerRuntimeState& state, ISequencerOutput& output)
         : state_(state)
         , output_(output) {}
 
     void reset();
+    void resyncToTick(uint32_t tick);
 
     void update(uint32_t tick, bool playing);
 
@@ -35,6 +36,7 @@ private:
 
     void start_();
     void stop_();
+    void prepareFromTick_(uint32_t tick);
     void advanceToTick_(uint32_t tick);
     void primeSchedule_();
     void scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep);
@@ -50,7 +52,7 @@ private:
     bool shouldTriggerStep_(uint8_t stepIndex, uint32_t stepNumber, uint8_t len);
     static uint32_t probabilityHash_(uint32_t runSeed, uint32_t cycleIndex, uint8_t stepIndex);
 
-    StepSequencerState& state_;
+    StepSequencerRuntimeState& state_;
     ISequencerOutput& output_;
     NoteScheduler scheduler_;
 

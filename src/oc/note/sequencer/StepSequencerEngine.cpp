@@ -16,10 +16,17 @@ void StepSequencerEngine::reset() {
     next_scheduled_step_number_ = 0;
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
-    last_enabled_mask_ = state_.enabledMask.get();
+    last_enabled_mask_ = state_.enabledMask;
     state_.probabilityCycleMask = 0;
     state_.probabilityCycleIndex = 0;
-    state_.probabilityCycleRevision.set(state_.probabilityCycleRevision.get() + 1U);
+    state_.probabilityCycleRevision += 1U;
+}
+
+void StepSequencerEngine::resyncToTick(uint32_t tick) {
+    scheduler_.clear();
+    output_.allNotesOff();
+    playing_ = true;
+    prepareFromTick_(tick);
 }
 
 uint8_t StepSequencerEngine::clampChannel_(uint8_t ch) {
@@ -32,8 +39,8 @@ uint8_t StepSequencerEngine::patternLength_() const {
 }
 
 uint8_t StepSequencerEngine::ticksPerStep_() const {
-    uint8_t spb = state_.stepsPerBeat.get();
-    if (spb == 0) spb = StepSequencerState::DEFAULT_STEPS_PER_BEAT;
+    uint8_t spb = state_.stepsPerBeat;
+    if (spb == 0) spb = StepSequencerRuntimeState::DEFAULT_STEPS_PER_BEAT;
     if (spb > oc::note::clock::PPQN) spb = static_cast<uint8_t>(oc::note::clock::PPQN);
 
     uint8_t tps = static_cast<uint8_t>(oc::note::clock::PPQN / spb);
@@ -68,7 +75,7 @@ uint32_t StepSequencerEngine::probabilityHash_(uint32_t runSeed, uint32_t cycleI
 uint64_t StepSequencerEngine::resolveCycleMask_(uint32_t cycleIndex, uint8_t len) const {
     if (len == 0) return 0;
 
-    const uint64_t enabledMask = state_.enabledMask.get();
+    const uint64_t enabledMask = state_.enabledMask;
     uint64_t resolvedMask = 0;
 
     for (uint8_t stepIndex = 0; stepIndex < len; ++stepIndex) {
@@ -76,7 +83,8 @@ uint64_t StepSequencerEngine::resolveCycleMask_(uint32_t cycleIndex, uint8_t len
         if ((enabledMask & stepBit) == 0) continue;
         if (state_.gate[stepIndex] == 0) continue;
 
-        const uint8_t probability = StepSequencerState::clampProbability(state_.probability[stepIndex]);
+        const uint8_t probability =
+            StepSequencerRuntimeState::clampProbability(state_.probability[stepIndex]);
         if (probability >= 100U) {
             resolvedMask |= stepBit;
             continue;
@@ -119,7 +127,7 @@ void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
     published_cycle_index_ = cycleIndex;
     state_.probabilityCycleIndex = cycleIndex;
     state_.probabilityCycleMask = maskForCycle_(cycleIndex, len);
-    state_.probabilityCycleRevision.set(state_.probabilityCycleRevision.get() + 1U);
+    state_.probabilityCycleRevision += 1U;
 }
 
 void StepSequencerEngine::start_() {
@@ -131,7 +139,7 @@ void StepSequencerEngine::start_() {
     ++run_seed_;
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
-    last_enabled_mask_ = state_.enabledMask.get();
+    last_enabled_mask_ = state_.enabledMask;
 
     const uint8_t len = patternLength_();
     if (len > 0) {
@@ -141,18 +149,52 @@ void StepSequencerEngine::start_() {
     primeSchedule_();
 }
 
+void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
+    const uint8_t len = patternLength_();
+    const uint8_t ticksPerStep = ticksPerStep_();
+
+    last_tick_ = tick;
+    published_cycle_index_ = UINT32_MAX;
+    clearCycleMaskCache_();
+    last_enabled_mask_ = state_.enabledMask;
+
+    if (len == 0) {
+        next_step_tick_ = 0;
+        next_scheduled_step_number_ = 0;
+        state_.playheadStep = -1;
+        state_.probabilityCycleMask = 0;
+        state_.probabilityCycleIndex = 0;
+        state_.probabilityCycleRevision += 1U;
+        return;
+    }
+
+    const uint32_t stepNumber = tick / ticksPerStep;
+    const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
+    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
+
+    publishCycleMask_(cycleIndex, len);
+    state_.playheadStep = static_cast<int16_t>(stepIndex);
+
+    next_step_tick_ = (stepNumber + 1U) * static_cast<uint32_t>(ticksPerStep);
+    next_scheduled_step_number_ = stepNumber + 1U;
+    while (next_scheduled_step_number_ < stepNumber + 4U) {
+        scheduleStep_(next_scheduled_step_number_, ticksPerStep);
+        ++next_scheduled_step_number_;
+    }
+}
+
 void StepSequencerEngine::stop_() {
     if (!playing_) return;
     playing_ = false;
     scheduler_.clear();
     output_.allNotesOff();
-    state_.playheadStep.set(-1);
+    state_.playheadStep = -1;
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
-    last_enabled_mask_ = state_.enabledMask.get();
+    last_enabled_mask_ = state_.enabledMask;
     state_.probabilityCycleMask = 0;
     state_.probabilityCycleIndex = 0;
-    state_.probabilityCycleRevision.set(state_.probabilityCycleRevision.get() + 1U);
+    state_.probabilityCycleRevision += 1U;
 }
 
 void StepSequencerEngine::update(uint32_t tick, bool playing) {
@@ -167,7 +209,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
 
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
-    const uint64_t enabledMask = state_.enabledMask.get();
+    const uint64_t enabledMask = state_.enabledMask;
     if (enabledMask != last_enabled_mask_) {
         last_enabled_mask_ = enabledMask;
         clearCycleMaskCache_();
@@ -186,7 +228,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
         next_scheduled_step_number_ = 0;
         published_cycle_index_ = UINT32_MAX;
         clearCycleMaskCache_();
-    last_enabled_mask_ = state_.enabledMask.get();
+        last_enabled_mask_ = state_.enabledMask;
         const uint8_t len = patternLength_();
         if (len > 0) {
             publishCycleMask_(0, len);
@@ -201,7 +243,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
 void StepSequencerEngine::advanceToTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     if (len == 0) {
-        state_.playheadStep.set(-1);
+        state_.playheadStep = -1;
         return;
     }
 
@@ -215,7 +257,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
         const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
 
         publishCycleMask_(cycleIndex, len);
-        state_.playheadStep.set(stepIndex);
+        state_.playheadStep = static_cast<int16_t>(stepIndex);
 
         while (next_scheduled_step_number_ < stepNumber + 3U) {
             scheduleStep_(next_scheduled_step_number_, ticksPerStep);
@@ -243,11 +285,11 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
     if (len == 0) return;
 
     const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
-    if (stepIndex >= StepSequencerState::MAX_STEPS) return;
+    if (stepIndex >= StepSequencerRuntimeState::MAX_STEPS) return;
 
     if (!shouldTriggerStep_(stepIndex, stepNumber, len)) return;
 
-    const uint8_t ch = clampChannel_(state_.midiChannel.get());
+    const uint8_t ch = clampChannel_(state_.midiChannel);
     const uint8_t note = state_.note[stepIndex];
     const uint8_t vel = state_.velocity[stepIndex];
 
