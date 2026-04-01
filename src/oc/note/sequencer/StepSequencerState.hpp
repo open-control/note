@@ -30,15 +30,7 @@ struct StepSequencerState {
     static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
     static constexpr uint8_t DEFAULT_PROBABILITY = 100;
 
-    StepSequencerState() {
-        length.setDebugLabel("note.stepSequencer.length");
-        playheadStep.setDebugLabel("note.stepSequencer.playheadStep");
-        stepsPerBeat.setDebugLabel("note.stepSequencer.stepsPerBeat");
-        midiChannel.setDebugLabel("note.stepSequencer.midiChannel");
-        enabledMask.setDebugLabel("note.stepSequencer.enabledMask");
-        probabilityCycleRevision.setDebugLabel("note.stepSequencer.probabilityCycleRevision");
-        reset();
-    }
+    StepSequencerState();
 
     // Playback / transport
     Signal<uint8_t, 8> length{DEFAULT_LENGTH};
@@ -65,24 +57,7 @@ struct StepSequencerState {
         return (value > 100U) ? 100U : value;
     }
 
-    void reset() {
-        length.set(DEFAULT_LENGTH);
-        playheadStep.set(-1);
-        stepsPerBeat.set(DEFAULT_STEPS_PER_BEAT);
-        midiChannel.set(DEFAULT_MIDI_CHANNEL_0BASED);
-        enabledMask.set(0);
-        probabilityCycleMask = 0;
-        probabilityCycleIndex = 0;
-        probabilityCycleRevision.set(0);
-
-        for (uint8_t i = 0; i < MAX_STEPS; ++i) {
-            note[i] = DEFAULT_NOTE;
-            velocity[i] = DEFAULT_VELOCITY;
-            gate[i] = DEFAULT_GATE_PERCENT;
-            nudge[i] = 0;
-            probability[i] = DEFAULT_PROBABILITY;
-        }
-    }
+    void reset();
 
     uint8_t patternLength() const {
         const uint8_t len = length.get();
