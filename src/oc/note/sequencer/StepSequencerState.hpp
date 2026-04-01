@@ -30,13 +30,21 @@ struct StepSequencerState {
     static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
     static constexpr uint8_t DEFAULT_PROBABILITY = 100;
 
-    StepSequencerState() { reset(); }
+    StepSequencerState() {
+        length.setDebugLabel("note.stepSequencer.length");
+        playheadStep.setDebugLabel("note.stepSequencer.playheadStep");
+        stepsPerBeat.setDebugLabel("note.stepSequencer.stepsPerBeat");
+        midiChannel.setDebugLabel("note.stepSequencer.midiChannel");
+        enabledMask.setDebugLabel("note.stepSequencer.enabledMask");
+        probabilityCycleRevision.setDebugLabel("note.stepSequencer.probabilityCycleRevision");
+        reset();
+    }
 
     // Playback / transport
-    Signal<uint8_t> length{DEFAULT_LENGTH};
+    Signal<uint8_t, 8> length{DEFAULT_LENGTH};
     Signal<int16_t> playheadStep{-1};
-    Signal<uint8_t> stepsPerBeat{DEFAULT_STEPS_PER_BEAT};
-    Signal<uint8_t> midiChannel{DEFAULT_MIDI_CHANNEL_0BASED};
+    Signal<uint8_t, 6> stepsPerBeat{DEFAULT_STEPS_PER_BEAT};
+    Signal<uint8_t, 6> midiChannel{DEFAULT_MIDI_CHANNEL_0BASED};
 
     // Step enable flags
     Signal<uint64_t> enabledMask{0};
