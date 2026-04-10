@@ -9,7 +9,7 @@ FLASHMEM StepSequencerState::StepSequencerState()
       playheadStep{-1},
       stepsPerBeat{DEFAULT_STEPS_PER_BEAT},
       midiChannel{DEFAULT_MIDI_CHANNEL_0BASED},
-      enabledMask{0},
+      enabledMask{},
       probabilityCycleRevision{0} {
     length.setDebugLabel("note.stepSequencer.length");
     playheadStep.setDebugLabel("note.stepSequencer.playheadStep");
@@ -25,8 +25,8 @@ FLASHMEM void StepSequencerState::reset() {
     playheadStep.set(-1);
     stepsPerBeat.set(DEFAULT_STEPS_PER_BEAT);
     midiChannel.set(DEFAULT_MIDI_CHANNEL_0BASED);
-    enabledMask.set(0);
-    probabilityCycleMask = 0;
+    enabledMask.set({});
+    probabilityCycleMask = {};
     probabilityCycleIndex = 0;
     probabilityCycleRevision.set(0);
 

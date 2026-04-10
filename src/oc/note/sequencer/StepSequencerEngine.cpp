@@ -4,7 +4,7 @@ namespace oc::note::sequencer {
 
 void StepSequencerEngine::clearCycleMaskCache_() {
     cached_cycle_indices_.fill(UINT32_MAX);
-    cached_cycle_masks_.fill(0);
+    cached_cycle_masks_.fill({});
     next_cycle_cache_slot_ = 0;
 }
 
@@ -17,7 +17,7 @@ void StepSequencerEngine::reset() {
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
-    state_.probabilityCycleMask = 0;
+    state_.probabilityCycleMask = {};
     state_.probabilityCycleIndex = 0;
     state_.probabilityCycleRevision += 1U;
 }
@@ -72,21 +72,20 @@ uint32_t StepSequencerEngine::probabilityHash_(uint32_t runSeed, uint32_t cycleI
     return x;
 }
 
-uint64_t StepSequencerEngine::resolveCycleMask_(uint32_t cycleIndex, uint8_t len) const {
-    if (len == 0) return 0;
+StepBitMask128 StepSequencerEngine::resolveCycleMask_(uint32_t cycleIndex, uint8_t len) const {
+    if (len == 0) return {};
 
-    const uint64_t enabledMask = state_.enabledMask;
-    uint64_t resolvedMask = 0;
+    const StepBitMask128 enabledMask = state_.enabledMask;
+    StepBitMask128 resolvedMask{};
 
     for (uint8_t stepIndex = 0; stepIndex < len; ++stepIndex) {
-        const uint64_t stepBit = (1ULL << stepIndex);
-        if ((enabledMask & stepBit) == 0) continue;
+        if (!enabledMask.test(stepIndex)) continue;
         if (state_.gate[stepIndex] == 0) continue;
 
         const uint8_t probability =
             StepSequencerRuntimeState::clampProbability(state_.probability[stepIndex]);
         if (probability >= 100U) {
-            resolvedMask |= stepBit;
+            resolvedMask.setBit(stepIndex, true);
             continue;
         }
         if (probability == 0U) {
@@ -94,21 +93,21 @@ uint64_t StepSequencerEngine::resolveCycleMask_(uint32_t cycleIndex, uint8_t len
         }
 
         if ((probabilityHash_(run_seed_, cycleIndex, stepIndex) % 100U) < probability) {
-            resolvedMask |= stepBit;
+            resolvedMask.setBit(stepIndex, true);
         }
     }
 
     return resolvedMask;
 }
 
-uint64_t StepSequencerEngine::maskForCycle_(uint32_t cycleIndex, uint8_t len) {
+StepBitMask128 StepSequencerEngine::maskForCycle_(uint32_t cycleIndex, uint8_t len) {
     for (size_t i = 0; i < CYCLE_MASK_CACHE_SIZE; ++i) {
         if (cached_cycle_indices_[i] == cycleIndex) {
             return cached_cycle_masks_[i];
         }
     }
 
-    const uint64_t mask = resolveCycleMask_(cycleIndex, len);
+    const StepBitMask128 mask = resolveCycleMask_(cycleIndex, len);
     cached_cycle_indices_[next_cycle_cache_slot_] = cycleIndex;
     cached_cycle_masks_[next_cycle_cache_slot_] = mask;
     next_cycle_cache_slot_ = (next_cycle_cache_slot_ + 1U) % CYCLE_MASK_CACHE_SIZE;
@@ -118,7 +117,7 @@ uint64_t StepSequencerEngine::maskForCycle_(uint32_t cycleIndex, uint8_t len) {
 bool StepSequencerEngine::shouldTriggerStep_(uint8_t stepIndex, uint32_t stepNumber, uint8_t len) {
     if (len == 0 || stepIndex >= len) return false;
     const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
-    return (maskForCycle_(cycleIndex, len) & (1ULL << stepIndex)) != 0;
+    return maskForCycle_(cycleIndex, len).test(stepIndex);
 }
 
 void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
@@ -162,7 +161,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         next_step_tick_ = 0;
         next_scheduled_step_number_ = 0;
         state_.playheadStep = -1;
-        state_.probabilityCycleMask = 0;
+        state_.probabilityCycleMask = {};
         state_.probabilityCycleIndex = 0;
         state_.probabilityCycleRevision += 1U;
         return;
@@ -192,7 +191,7 @@ void StepSequencerEngine::stop_() {
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
-    state_.probabilityCycleMask = 0;
+    state_.probabilityCycleMask = {};
     state_.probabilityCycleIndex = 0;
     state_.probabilityCycleRevision += 1U;
 }
@@ -209,7 +208,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
 
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
-    const uint64_t enabledMask = state_.enabledMask;
+    const StepBitMask128 enabledMask = state_.enabledMask;
     if (enabledMask != last_enabled_mask_) {
         last_enabled_mask_ = enabledMask;
         clearCycleMaskCache_();

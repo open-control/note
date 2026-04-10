@@ -3,14 +3,16 @@
 #include <array>
 #include <cstdint>
 
+#include "StepBitMask128.hpp"
+
 namespace oc::note::sequencer {
 
 struct StepSequencerRuntimeState {
-    static constexpr uint8_t MAX_STEPS = 64;
+    static constexpr uint8_t MAX_STEPS = 128;
     static constexpr uint16_t MAX_GATE_PERCENT = 200;
 
     static constexpr uint8_t DEFAULT_LENGTH = 8;
-    static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 2;
+    static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 4;
     static constexpr uint8_t DEFAULT_MIDI_CHANNEL_0BASED = 0;
     static constexpr uint8_t DEFAULT_NOTE = 48;
     static constexpr uint8_t DEFAULT_VELOCITY = 64;
@@ -21,10 +23,10 @@ struct StepSequencerRuntimeState {
     int16_t playheadStep = -1;
     uint8_t stepsPerBeat = DEFAULT_STEPS_PER_BEAT;
     uint8_t midiChannel = DEFAULT_MIDI_CHANNEL_0BASED;
-    uint64_t enabledMask = 0;
+    StepBitMask128 enabledMask{};
 
     uint32_t probabilityCycleRevision = 0;
-    uint64_t probabilityCycleMask = 0;
+    StepBitMask128 probabilityCycleMask{};
     uint32_t probabilityCycleIndex = 0;
 
     std::array<uint8_t, MAX_STEPS> note{};
@@ -44,9 +46,9 @@ struct StepSequencerRuntimeState {
         playheadStep = -1;
         stepsPerBeat = DEFAULT_STEPS_PER_BEAT;
         midiChannel = DEFAULT_MIDI_CHANNEL_0BASED;
-        enabledMask = 0;
+        enabledMask = {};
         probabilityCycleRevision = 0;
-        probabilityCycleMask = 0;
+        probabilityCycleMask = {};
         probabilityCycleIndex = 0;
 
         for (uint8_t i = 0; i < MAX_STEPS; ++i) {
