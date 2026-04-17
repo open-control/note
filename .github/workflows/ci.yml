@@ -13,6 +13,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PLATFORMIO_VERSION: "6.1.18"
+
 jobs:
   native_tests:
     name: native tests
@@ -40,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install platformio
+          python -m pip install "platformio==${PLATFORMIO_VERSION}"
 
       - name: Cache PlatformIO
         uses: actions/cache@v5
