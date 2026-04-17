@@ -4,10 +4,12 @@
 #include <vector>
 
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
+#include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
 
 using oc::note::sequencer::ISequencerOutput;
 using oc::note::sequencer::StepSequencerEngine;
-using oc::note::sequencer::StepSequencerState;
+using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::StepSequencerRuntimeState;
 
 namespace {
 
@@ -63,11 +65,11 @@ void setUp() {}
 void tearDown() {}
 
 void test_gate_zero_mutes_note() {
-    StepSequencerState st;
-    st.length.set(4);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 0);
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
     st.note[0] = 60;
     st.velocity[0] = 100;
     st.gate[0] = 0;
@@ -78,15 +80,15 @@ void test_gate_zero_mutes_note() {
     eng.update(0, true);
 
     TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
 }
 
 void test_velocity_zero_is_sent() {
-    StepSequencerState st;
-    st.length.set(4);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 0);
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
     st.note[0] = 60;
     st.velocity[0] = 0;
     st.gate[0] = 50;
@@ -104,11 +106,11 @@ void test_velocity_zero_is_sent() {
 }
 
 void test_note_off_follows_gate_percent() {
-    StepSequencerState st;
-    st.length.set(4);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 0);
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
     st.note[0] = 60;
     st.velocity[0] = 100;
     st.gate[0] = 50;
@@ -131,11 +133,11 @@ void test_note_off_follows_gate_percent() {
 }
 
 void test_boundary_order_note_off_before_next_step() {
-    StepSequencerState st;
-    st.length.set(2);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set((1ULL << 0) | (1ULL << 1));
+    StepSequencerRuntimeState st;
+    st.length = 2;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
     st.note[0] = 60;
     st.note[1] = 62;
     st.velocity[0] = 100;
@@ -160,11 +162,11 @@ void test_boundary_order_note_off_before_next_step() {
 }
 
 void test_positive_nudge_delays_note_on_and_note_off() {
-    StepSequencerState st;
-    st.length.set(2);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 0);
+    StepSequencerRuntimeState st;
+    st.length = 2;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
     st.note[0] = 60;
     st.velocity[0] = 100;
     st.gate[0] = 50;
@@ -175,7 +177,7 @@ void test_positive_nudge_delays_note_on_and_note_off() {
 
     eng.update(0, true);
     TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(2, true);
     TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
@@ -195,11 +197,11 @@ void test_positive_nudge_delays_note_on_and_note_off() {
 }
 
 void test_negative_nudge_triggers_before_quantized_boundary() {
-    StepSequencerState st;
-    st.length.set(2);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 1);
+    StepSequencerRuntimeState st;
+    st.length = 2;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 1);
     st.note[1] = 62;
     st.velocity[1] = 100;
     st.gate[1] = 50;
@@ -209,32 +211,32 @@ void test_negative_nudge_triggers_before_quantized_boundary() {
     StepSequencerEngine eng(st, out);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
     TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
 
     eng.update(2, true);
     TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(3, true);
     TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
     TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
     TEST_ASSERT_EQUAL_UINT8(62, out.events[0].note);
-    TEST_ASSERT_EQUAL(0, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(6, true);
     TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
     TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
     TEST_ASSERT_EQUAL_UINT8(62, out.events[1].note);
-    TEST_ASSERT_EQUAL(1, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(1, st.playheadStep);
 }
 
 void test_note_off_stays_before_next_note_on_when_nudged() {
-    StepSequencerState st;
-    st.length.set(2);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set((1ULL << 0) | (1ULL << 1));
+    StepSequencerRuntimeState st;
+    st.length = 2;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
     st.note[0] = 60;
     st.note[1] = 62;
     st.velocity[0] = 100;
@@ -264,11 +266,11 @@ void test_note_off_stays_before_next_note_on_when_nudged() {
 }
 
 void test_stop_calls_all_notes_off_once() {
-    StepSequencerState st;
-    st.length.set(2);
-    st.stepsPerBeat.set(4);
-    st.midiChannel.set(0);
-    st.enabledMask.set(1ULL << 0);
+    StepSequencerRuntimeState st;
+    st.length = 2;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
     st.note[0] = 60;
     st.velocity[0] = 100;
     st.gate[0] = 100;
@@ -282,7 +284,7 @@ void test_stop_calls_all_notes_off_once() {
     eng.update(1, false);
     TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
     TEST_ASSERT_EQUAL(1, countType(out.events, EventType::AllNotesOff));
-    TEST_ASSERT_EQUAL(-1, st.playheadStep.get());
+    TEST_ASSERT_EQUAL(-1, st.playheadStep);
 
     eng.update(2, false);
     TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
