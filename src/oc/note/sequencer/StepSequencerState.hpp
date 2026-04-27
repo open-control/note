@@ -12,7 +12,7 @@ namespace oc::note::sequencer {
 using oc::state::Signal;
 
 /**
- * @brief Minimal mono-track step sequencer state (v0)
+ * @brief Mono-track step sequencer state
  *
  * This state is designed to be:
  * - UI-friendly (reactive signals for key UI updates)
@@ -23,7 +23,7 @@ struct StepSequencerState {
     static constexpr uint8_t MAX_STEPS = 128;
     static constexpr uint16_t MAX_GATE_PERCENT = 200;
 
-    // Defaults (v0)
+    // Defaults
     static constexpr uint8_t DEFAULT_LENGTH = 8;
     static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 4;  // 1/16
     static constexpr uint8_t DEFAULT_MIDI_CHANNEL_0BASED = 0;  // channel 1
@@ -48,11 +48,11 @@ struct StepSequencerState {
     StepBitMask128 probabilityCycleMask{};
     uint32_t probabilityCycleIndex = 0;
 
-    // Step properties (v0)
+    // Step properties
     std::array<uint8_t, MAX_STEPS> note{};         // MIDI note number 0..127
     std::array<uint8_t, MAX_STEPS> velocity{};     // 0..127 (0 is valid)
     std::array<uint16_t, MAX_STEPS> gate{};        // percent (0..MAX_GATE_PERCENT)
-    std::array<int8_t, MAX_STEPS> nudge{};         // -50..50 (not used by v0 engine)
+    std::array<int8_t, MAX_STEPS> nudge{};         // -50..50
     std::array<uint8_t, MAX_STEPS> probability{};  // percent 0..100
 
     static uint8_t clampProbability(uint8_t value) {

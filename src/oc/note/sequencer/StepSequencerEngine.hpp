@@ -5,24 +5,17 @@
 
 #include <oc/note/clock/ClockConstants.hpp>
 
-#include "ISequencerOutput.hpp"
 #include "NoteScheduler.hpp"
+#include "SequencerEvent.hpp"
 #include "StepSequencerRuntimeState.hpp"
 
 namespace oc::note::sequencer {
 
-/**
- * @brief Minimal mono-track step sequencer engine (v0)
- *
- * Contract:
- * - tick domain is PPQN=24 and should reset to 0 when playback starts.
- * - engine outputs MIDI while `playing=true`, independent of UI/view state.
- */
 class StepSequencerEngine {
 public:
-    StepSequencerEngine(StepSequencerRuntimeState& state, ISequencerOutput& output)
+    StepSequencerEngine(StepSequencerRuntimeState& state, ISequencerEventSink& eventSink)
         : state_(state)
-        , output_(output) {}
+        , event_sink_(eventSink) {}
 
     void reset();
     void resyncToTick(uint32_t tick);
@@ -42,6 +35,8 @@ private:
     void scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep);
     void publishCycleMask_(uint32_t cycleIndex, uint8_t len);
     void clearCycleMaskCache_();
+    bool emitAllNotesOff_(uint32_t tick);
+    bool processDueEvents_(uint32_t tick);
 
     uint8_t ticksPerStep_() const;
     uint8_t patternLength_() const;
@@ -53,7 +48,7 @@ private:
     static uint32_t probabilityHash_(uint32_t runSeed, uint32_t cycleIndex, uint8_t stepIndex);
 
     StepSequencerRuntimeState& state_;
-    ISequencerOutput& output_;
+    ISequencerEventSink& event_sink_;
     NoteScheduler scheduler_;
 
     bool playing_ = false;

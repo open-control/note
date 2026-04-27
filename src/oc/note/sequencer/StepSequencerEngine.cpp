@@ -24,7 +24,7 @@ void StepSequencerEngine::reset() {
 
 void StepSequencerEngine::resyncToTick(uint32_t tick) {
     scheduler_.clear();
-    output_.allNotesOff();
+    emitAllNotesOff_(tick);
     playing_ = true;
     prepareFromTick_(tick);
 }
@@ -186,7 +186,7 @@ void StepSequencerEngine::stop_() {
     if (!playing_) return;
     playing_ = false;
     scheduler_.clear();
-    output_.allNotesOff();
+    emitAllNotesOff_(last_tick_);
     state_.playheadStep = -1;
     published_cycle_index_ = UINT32_MAX;
     clearCycleMaskCache_();
@@ -249,7 +249,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
     const uint8_t ticksPerStep = ticksPerStep_();
 
     while (next_step_tick_ <= tick) {
-        scheduler_.processUntil(next_step_tick_, output_);
+        processDueEvents_(next_step_tick_);
 
         const uint32_t stepNumber = next_step_tick_ / ticksPerStep;
         const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
@@ -266,7 +266,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
         next_step_tick_ += ticksPerStep;
     }
 
-    scheduler_.processUntil(tick, output_);
+    processDueEvents_(tick);
 }
 
 void StepSequencerEngine::primeSchedule_() {
@@ -301,7 +301,7 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
     const uint32_t onTick = static_cast<uint32_t>(onTickSigned);
 
     if (!scheduler_.scheduleNoteOn(onTick, ch, note, vel)) {
-        output_.allNotesOff();
+        emitAllNotesOff_(onTick);
         scheduler_.clear();
         return;
     }
@@ -311,10 +311,26 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
 
     const uint32_t offTick = onTick + offTicks;
     if (!scheduler_.scheduleNoteOff(offTick, ch, note, 0)) {
-        // Fail-safe: avoid hanging notes if scheduler saturates.
-        output_.allNotesOff();
+        emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
+}
+
+bool StepSequencerEngine::emitAllNotesOff_(uint32_t tick) {
+    SequencerEvent event{};
+    event.tick = tick;
+    event.type = SequencerEventType::AllNotesOff;
+    return event_sink_.emitSequencerEvent(event);
+}
+
+bool StepSequencerEngine::processDueEvents_(uint32_t tick) {
+    if (scheduler_.processUntil(tick, event_sink_)) {
+        return true;
+    }
+
+    emitAllNotesOff_(tick);
+    scheduler_.clear();
+    return false;
 }
 
 }  // namespace oc::note::sequencer

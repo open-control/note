@@ -3,54 +3,30 @@
 #include <cstdint>
 #include <vector>
 
+#include <oc/note/sequencer/SequencerEvent.hpp>
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
 #include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
 
-using oc::note::sequencer::ISequencerOutput;
+using oc::note::sequencer::ISequencerEventSink;
+using oc::note::sequencer::SequencerEvent;
+using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
 using oc::note::sequencer::StepBitMask128;
 using oc::note::sequencer::StepSequencerRuntimeState;
 
 namespace {
 
-enum class EventType : uint8_t {
-    NoteOn,
-    NoteOff,
-    CC,
-    AllNotesOff,
-};
-
-struct Event {
-    EventType type;
-    uint8_t ch;
-    uint8_t note;
-    uint8_t vel;
-    uint8_t cc;
-    uint8_t value;
-};
-
-class MockOutput final : public ISequencerOutput {
+class MockEventSink final : public ISequencerEventSink {
 public:
-    std::vector<Event> events;
+    std::vector<SequencerEvent> events;
 
-    void sendNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) override {
-        events.push_back({EventType::NoteOn, channel, note, velocity, 0, 0});
-    }
-
-    void sendNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) override {
-        events.push_back({EventType::NoteOff, channel, note, velocity, 0, 0});
-    }
-
-    void sendCC(uint8_t channel, uint8_t cc, uint8_t value) override {
-        events.push_back({EventType::CC, channel, 0, 0, cc, value});
-    }
-
-    void allNotesOff() override {
-        events.push_back({EventType::AllNotesOff, 0, 0, 0, 0, 0});
+    bool emitSequencerEvent(const SequencerEvent& event) override {
+        events.push_back(event);
+        return true;
     }
 };
 
-int countType(const std::vector<Event>& events, EventType type) {
+int countType(const std::vector<SequencerEvent>& events, SequencerEventType type) {
     int count = 0;
     for (const auto& e : events) {
         if (e.type == type) ++count;
@@ -74,12 +50,12 @@ void test_gate_zero_mutes_note() {
     st.velocity[0] = 100;
     st.gate[0] = 0;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
 
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
     TEST_ASSERT_EQUAL(0, st.playheadStep);
 }
 
@@ -93,16 +69,16 @@ void test_velocity_zero_is_sent() {
     st.velocity[0] = 0;
     st.gate[0] = 50;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
 
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
-    TEST_ASSERT_EQUAL_UINT8(0, out.events[0].ch);
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
-    TEST_ASSERT_EQUAL_UINT8(0, out.events[0].vel);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[0].channel);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[0].velocity);
 }
 
 void test_note_off_follows_gate_percent() {
@@ -115,21 +91,21 @@ void test_note_off_follows_gate_percent() {
     st.velocity[0] = 100;
     st.gate[0] = 50;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
 
     eng.update(2, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
 
     eng.update(3, true);
-    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
-    TEST_ASSERT_EQUAL_UINT8(0, out.events[1].ch);
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
-    TEST_ASSERT_EQUAL_UINT8(0, out.events[1].vel);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[1].channel);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[1].velocity);
 }
 
 void test_boundary_order_note_off_before_next_step() {
@@ -145,20 +121,20 @@ void test_boundary_order_note_off_before_next_step() {
     st.gate[0] = 100;
     st.gate[1] = 100;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
 
     eng.update(6, true);
-    TEST_ASSERT_EQUAL(3, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[2].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
-    TEST_ASSERT_EQUAL_UINT8(62, out.events[2].note);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[2].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
 }
 
 void test_positive_nudge_delays_note_on_and_note_off() {
@@ -172,28 +148,28 @@ void test_positive_nudge_delays_note_on_and_note_off() {
     st.gate[0] = 50;
     st.nudge[0] = 50;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
     TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(2, true);
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
 
     eng.update(3, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
 
     eng.update(5, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
 
     eng.update(6, true);
-    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
 }
 
 void test_negative_nudge_triggers_before_quantized_boundary() {
@@ -207,27 +183,27 @@ void test_negative_nudge_triggers_before_quantized_boundary() {
     st.gate[1] = 50;
     st.nudge[1] = -50;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
     TEST_ASSERT_EQUAL(0, st.playheadStep);
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
 
     eng.update(2, true);
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
     TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(3, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
-    TEST_ASSERT_EQUAL_UINT8(62, out.events[0].note);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[0].note);
     TEST_ASSERT_EQUAL(0, st.playheadStep);
 
     eng.update(6, true);
-    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
-    TEST_ASSERT_EQUAL_UINT8(62, out.events[1].note);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[1].note);
     TEST_ASSERT_EQUAL(1, st.playheadStep);
 }
 
@@ -246,23 +222,23 @@ void test_note_off_stays_before_next_note_on_when_nudged() {
     st.nudge[0] = 50;
     st.nudge[1] = 0;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(0, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
 
     eng.update(3, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[0].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[0].note);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
 
     eng.update(6, true);
-    TEST_ASSERT_EQUAL(3, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOff), static_cast<uint8_t>(out.events[1].type));
-    TEST_ASSERT_EQUAL(static_cast<uint8_t>(EventType::NoteOn), static_cast<uint8_t>(out.events[2].type));
-    TEST_ASSERT_EQUAL_UINT8(60, out.events[1].note);
-    TEST_ASSERT_EQUAL_UINT8(62, out.events[2].note);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[2].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
 }
 
 void test_stop_calls_all_notes_off_once() {
@@ -275,20 +251,20 @@ void test_stop_calls_all_notes_off_once() {
     st.velocity[0] = 100;
     st.gate[0] = 100;
 
-    MockOutput out;
-    StepSequencerEngine eng(st, out);
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
 
     eng.update(0, true);
-    TEST_ASSERT_EQUAL(1, static_cast<int>(out.events.size()));
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
 
     eng.update(1, false);
-    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(1, countType(out.events, EventType::AllNotesOff));
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(1, countType(sink.events, SequencerEventType::AllNotesOff));
     TEST_ASSERT_EQUAL(-1, st.playheadStep);
 
     eng.update(2, false);
-    TEST_ASSERT_EQUAL(2, static_cast<int>(out.events.size()));
-    TEST_ASSERT_EQUAL(1, countType(out.events, EventType::AllNotesOff));
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(1, countType(sink.events, SequencerEventType::AllNotesOff));
 }
 
 int main() {
