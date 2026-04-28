@@ -11,8 +11,8 @@ Design constraints:
 
 - No LVGL
 - No Teensy/HAL dependencies
-- Testable on `platform=native`
+- Testable through the `ms-dev-env` CMake/CTest workflow with pinned test dependencies
 
 Build / test:
 
-- `pio test -e native`
+- `uv run ms test open-control-note`
