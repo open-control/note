@@ -33,7 +33,14 @@ private:
     void advanceToTick_(uint32_t tick);
     void primeSchedule_();
     void scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep);
+    StepSequencerResolvedVariation resolveVariation_(uint8_t stepIndex,
+                                                     uint32_t cycleIndex,
+                                                     bool triggered) const;
+    void publishResolvedVariation_(uint8_t stepIndex, uint32_t cycleIndex, bool triggered);
     void publishCycleMask_(uint32_t cycleIndex, uint8_t len);
+    void publishCycleVariationTelemetry_(uint32_t cycleIndex,
+                                         uint8_t len,
+                                         const StepBitMask128& triggeredMask);
     void clearCycleMaskCache_();
     bool emitAllNotesOff_(uint32_t tick);
     bool processDueEvents_(uint32_t tick);

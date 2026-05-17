@@ -1,5 +1,7 @@
 #include "StepSequencerEngine.hpp"
 
+#include <algorithm>
+
 namespace oc::note::sequencer {
 
 void StepSequencerEngine::clearCycleMaskCache_() {
@@ -20,6 +22,9 @@ void StepSequencerEngine::reset() {
     state_.probabilityCycleMask = {};
     state_.probabilityCycleIndex = 0;
     state_.probabilityCycleRevision += 1U;
+    state_.lastResolvedVariation = {};
+    state_.cycleVariationTelemetry.reset();
+    state_.variationTelemetryRevision += 1U;
 }
 
 void StepSequencerEngine::resyncToTick(uint32_t tick) {
@@ -127,6 +132,7 @@ void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
     state_.probabilityCycleIndex = cycleIndex;
     state_.probabilityCycleMask = maskForCycle_(cycleIndex, len);
     state_.probabilityCycleRevision += 1U;
+    publishCycleVariationTelemetry_(cycleIndex, len, state_.probabilityCycleMask);
 }
 
 void StepSequencerEngine::start_() {
@@ -164,6 +170,9 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         state_.probabilityCycleMask = {};
         state_.probabilityCycleIndex = 0;
         state_.probabilityCycleRevision += 1U;
+        state_.lastResolvedVariation = {};
+        state_.cycleVariationTelemetry.reset();
+        state_.variationTelemetryRevision += 1U;
         return;
     }
 
@@ -173,6 +182,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
 
     publishCycleMask_(cycleIndex, len);
     state_.playheadStep = static_cast<int16_t>(stepIndex);
+    publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
 
     next_step_tick_ = (stepNumber + 1U) * static_cast<uint32_t>(ticksPerStep);
     next_scheduled_step_number_ = stepNumber + 1U;
@@ -194,6 +204,9 @@ void StepSequencerEngine::stop_() {
     state_.probabilityCycleMask = {};
     state_.probabilityCycleIndex = 0;
     state_.probabilityCycleRevision += 1U;
+    state_.lastResolvedVariation = {};
+    state_.cycleVariationTelemetry.reset();
+    state_.variationTelemetryRevision += 1U;
 }
 
 void StepSequencerEngine::update(uint32_t tick, bool playing) {
@@ -257,6 +270,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
 
         publishCycleMask_(cycleIndex, len);
         state_.playheadStep = static_cast<int16_t>(stepIndex);
+        publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
 
         while (next_scheduled_step_number_ < stepNumber + 3U) {
             scheduleStep_(next_scheduled_step_number_, ticksPerStep);
@@ -288,12 +302,15 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
 
     if (!shouldTriggerStep_(stepIndex, stepNumber, len)) return;
 
+    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
+    const auto variation = resolveVariation_(stepIndex, cycleIndex, true);
+
     const uint8_t ch = clampChannel_(state_.midiChannel);
-    const uint8_t note = state_.note[stepIndex];
-    const uint8_t vel = state_.velocity[stepIndex];
+    const uint8_t note = variation.resolved.note;
+    const uint8_t vel = variation.resolved.velocity;
 
     const uint32_t stepStartTick = stepNumber * static_cast<uint32_t>(ticksPerStep);
-    const int32_t startOffset = nudgeTickOffset_(state_.nudge[stepIndex], ticksPerStep);
+    const int32_t startOffset = nudgeTickOffset_(variation.resolved.nudge, ticksPerStep);
     int64_t onTickSigned = static_cast<int64_t>(stepStartTick) + static_cast<int64_t>(startOffset);
     if (onTickSigned < 0) {
         onTickSigned = 0;
@@ -306,7 +323,7 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
         return;
     }
 
-    uint32_t offTicks = (static_cast<uint32_t>(state_.gate[stepIndex]) * ticksPerStep) / 100U;
+    uint32_t offTicks = (static_cast<uint32_t>(variation.resolved.gate) * ticksPerStep) / 100U;
     if (offTicks == 0) offTicks = 1;
 
     const uint32_t offTick = onTick + offTicks;
@@ -314,6 +331,53 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
+}
+
+StepSequencerResolvedVariation StepSequencerEngine::resolveVariation_(uint8_t stepIndex,
+                                                                      uint32_t cycleIndex,
+                                                                      bool triggered) const {
+    if (stepIndex >= StepSequencerRuntimeState::MAX_STEPS) {
+        return {};
+    }
+
+    return resolveStepVariation(
+        StepSequencerStepValues{
+            .note = state_.note[stepIndex],
+            .velocity = state_.velocity[stepIndex],
+            .gate = state_.gate[stepIndex],
+            .nudge = state_.nudge[stepIndex],
+        },
+        state_.variationRanges,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        run_seed_,
+        cycleIndex,
+        stepIndex,
+        triggered
+    );
+}
+
+void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
+                                                    uint32_t cycleIndex,
+                                                    bool triggered) {
+    state_.lastResolvedVariation = resolveVariation_(stepIndex, cycleIndex, triggered);
+}
+
+void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
+                                                         uint8_t len,
+                                                         const StepBitMask128& triggeredMask) {
+    state_.cycleVariationTelemetry.reset();
+    state_.cycleVariationTelemetry.cycleIndex = cycleIndex;
+    state_.cycleVariationTelemetry.ranges = state_.variationRanges;
+    state_.cycleVariationTelemetry.ranges.clamp();
+
+    const uint8_t safeLen = std::min<uint8_t>(len, StepSequencerRuntimeState::MAX_STEPS);
+    for (uint8_t stepIndex = 0; stepIndex < safeLen; ++stepIndex) {
+        const bool enabled = state_.enabledMask.test(stepIndex);
+        const bool triggered = enabled && triggeredMask.test(stepIndex);
+        state_.cycleVariationTelemetry.store(resolveVariation_(stepIndex, cycleIndex, triggered));
+    }
+
+    state_.variationTelemetryRevision += 1U;
 }
 
 bool StepSequencerEngine::emitAllNotesOff_(uint32_t tick) {

@@ -29,6 +29,7 @@ FLASHMEM void StepSequencerState::reset() {
     probabilityCycleMask = {};
     probabilityCycleIndex = 0;
     probabilityCycleRevision.set(0);
+    variationRanges = {};
 
     for (uint8_t i = 0; i < MAX_STEPS; ++i) {
         note[i] = DEFAULT_NOTE;
