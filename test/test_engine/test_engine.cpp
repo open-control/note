@@ -6,13 +6,17 @@
 #include <oc/note/sequencer/SequencerEvent.hpp>
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
 #include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
+#include <oc/note/sequencer/StepSequencerVariation.hpp>
 
 using oc::note::sequencer::ISequencerEventSink;
 using oc::note::sequencer::SequencerEvent;
 using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
 using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::StepSequencerStepValues;
 using oc::note::sequencer::StepSequencerRuntimeState;
+using oc::note::sequencer::StepSequencerVariationRanges;
+using oc::note::sequencer::resolveStepVariation;
 
 namespace {
 
@@ -32,6 +36,14 @@ int countType(const std::vector<SequencerEvent>& events, SequencerEventType type
         if (e.type == type) ++count;
     }
     return count;
+}
+
+const SequencerEvent* firstEventOfType(const std::vector<SequencerEvent>& events,
+                                       SequencerEventType type) {
+    for (const auto& e : events) {
+        if (e.type == type) return &e;
+    }
+    return nullptr;
 }
 
 }  // namespace
@@ -267,6 +279,117 @@ void test_stop_calls_all_notes_off_once() {
     TEST_ASSERT_EQUAL(1, countType(sink.events, SequencerEventType::AllNotesOff));
 }
 
+void test_variation_changes_scheduled_note_velocity_gate_and_telemetry() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 100;
+    st.nudge[0] = 0;
+    st.variationRanges = StepSequencerVariationRanges{
+        .pitchSemitones = 12,
+        .velocity = 32,
+        .gatePercent = 50,
+        .nudge = 0,
+    };
+
+    const auto expected = resolveStepVariation(
+        StepSequencerStepValues{.note = 60, .velocity = 96, .gate = 100, .nudge = 0},
+        st.variationRanges,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        1,
+        0,
+        0
+    );
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    const auto telemetry = st.lastResolvedVariation;
+    const auto cycleTelemetry = st.cycleVariationTelemetry;
+    const uint32_t telemetryRevision = st.variationTelemetryRevision;
+    eng.update(12, true);
+
+    const auto* on = firstEventOfType(sink.events, SequencerEventType::NoteOn);
+    const auto* off = firstEventOfType(sink.events, SequencerEventType::NoteOff);
+    TEST_ASSERT_NOT_NULL(on);
+    TEST_ASSERT_NOT_NULL(off);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.note, on->note);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.velocity, on->velocity);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.note, off->note);
+    TEST_ASSERT_EQUAL_UINT32(0, on->tick);
+    TEST_ASSERT_EQUAL_UINT32(
+        (static_cast<uint32_t>(expected.resolved.gate) * 6U) / 100U,
+        off->tick
+    );
+
+    TEST_ASSERT_EQUAL_UINT32(1, telemetryRevision);
+    TEST_ASSERT_TRUE(telemetry.triggered);
+    TEST_ASSERT_EQUAL_UINT8(0, telemetry.stepIndex);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.note, telemetry.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.velocity, telemetry.resolved.velocity);
+    TEST_ASSERT_EQUAL_UINT16(expected.resolved.gate, telemetry.resolved.gate);
+    TEST_ASSERT_EQUAL_UINT32(0, cycleTelemetry.cycleIndex);
+    TEST_ASSERT_TRUE(cycleTelemetry.validMask.test(0));
+    TEST_ASSERT_TRUE(cycleTelemetry.triggeredMask.test(0));
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.note, cycleTelemetry.resolvedNote[0]);
+    TEST_ASSERT_EQUAL_UINT8(expected.resolved.velocity, cycleTelemetry.resolvedVelocity[0]);
+    TEST_ASSERT_EQUAL_UINT16(expected.resolved.gate, cycleTelemetry.resolvedGate[0]);
+    TEST_ASSERT_EQUAL_INT8(expected.pitchDelta, cycleTelemetry.pitchDelta[0]);
+    TEST_ASSERT_EQUAL_INT16(expected.velocityDelta, cycleTelemetry.velocityDelta[0]);
+    TEST_ASSERT_EQUAL_INT16(expected.gateDelta, cycleTelemetry.gateDelta[0]);
+}
+
+void test_variation_changes_scheduled_nudge() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 50;
+    st.nudge[0] = 0;
+    st.variationRanges = StepSequencerVariationRanges{
+        .pitchSemitones = 0,
+        .velocity = 0,
+        .gatePercent = 0,
+        .nudge = 50,
+    };
+
+    const auto expected = resolveStepVariation(
+        StepSequencerStepValues{.note = 60, .velocity = 96, .gate = 50, .nudge = 0},
+        st.variationRanges,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        1,
+        0,
+        0
+    );
+    int32_t expectedOnTick = (static_cast<int32_t>(expected.resolved.nudge) * 6 + 50) / 100;
+    if (expected.resolved.nudge < 0) {
+        expectedOnTick = -((((-static_cast<int32_t>(expected.resolved.nudge)) * 6) + 50) / 100);
+    }
+    if (expectedOnTick < 0) {
+        expectedOnTick = 0;
+    }
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    const auto telemetry = st.lastResolvedVariation;
+    eng.update(12, true);
+
+    const auto* on = firstEventOfType(sink.events, SequencerEventType::NoteOn);
+    TEST_ASSERT_NOT_NULL(on);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(expectedOnTick), on->tick);
+    TEST_ASSERT_EQUAL_INT8(expected.resolved.nudge, telemetry.resolved.nudge);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_gate_zero_mutes_note);
@@ -277,5 +400,7 @@ int main() {
     RUN_TEST(test_negative_nudge_triggers_before_quantized_boundary);
     RUN_TEST(test_note_off_stays_before_next_note_on_when_nudged);
     RUN_TEST(test_stop_calls_all_notes_off_once);
+    RUN_TEST(test_variation_changes_scheduled_note_velocity_gate_and_telemetry);
+    RUN_TEST(test_variation_changes_scheduled_nudge);
     return UNITY_END();
 }

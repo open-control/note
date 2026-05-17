@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerVariation.hpp"
 
 namespace oc::note::sequencer {
 
@@ -35,6 +36,11 @@ struct StepSequencerRuntimeState {
     std::array<int8_t, MAX_STEPS> nudge{};
     std::array<uint8_t, MAX_STEPS> probability{};
 
+    StepSequencerVariationRanges variationRanges{};
+    uint32_t variationTelemetryRevision = 0;
+    StepSequencerResolvedVariation lastResolvedVariation{};
+    StepSequencerCycleVariationTelemetry cycleVariationTelemetry{};
+
     StepSequencerRuntimeState() { reset(); }
 
     static uint8_t clampProbability(uint8_t value) {
@@ -50,6 +56,10 @@ struct StepSequencerRuntimeState {
         probabilityCycleRevision = 0;
         probabilityCycleMask = {};
         probabilityCycleIndex = 0;
+        variationTelemetryRevision = 0;
+        variationRanges = {};
+        lastResolvedVariation = {};
+        cycleVariationTelemetry.reset();
 
         for (uint8_t i = 0; i < MAX_STEPS; ++i) {
             note[i] = DEFAULT_NOTE;

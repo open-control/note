@@ -6,6 +6,7 @@
 #include <oc/state/Signal.hpp>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerVariation.hpp"
 
 namespace oc::note::sequencer {
 
@@ -54,6 +55,7 @@ struct StepSequencerState {
     std::array<uint16_t, MAX_STEPS> gate{};        // percent (0..MAX_GATE_PERCENT)
     std::array<int8_t, MAX_STEPS> nudge{};         // -50..50
     std::array<uint8_t, MAX_STEPS> probability{};  // percent 0..100
+    StepSequencerVariationRanges variationRanges{};
 
     static uint8_t clampProbability(uint8_t value) {
         return (value > 100U) ? 100U : value;
