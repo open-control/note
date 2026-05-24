@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerScale.hpp"
 #include "StepSequencerVariation.hpp"
 
 namespace oc::note::sequencer {
@@ -36,7 +37,9 @@ struct StepSequencerRuntimeState {
     std::array<int8_t, MAX_STEPS> nudge{};
     std::array<uint8_t, MAX_STEPS> probability{};
 
+    StepSequencerScaleSettings scaleSettings{};
     StepSequencerVariationRanges variationRanges{};
+    bool variationTelemetryEnabled = true;
     uint32_t variationTelemetryRevision = 0;
     StepSequencerResolvedVariation lastResolvedVariation{};
     StepSequencerCycleVariationTelemetry cycleVariationTelemetry{};
@@ -57,6 +60,8 @@ struct StepSequencerRuntimeState {
         probabilityCycleMask = {};
         probabilityCycleIndex = 0;
         variationTelemetryRevision = 0;
+        variationTelemetryEnabled = true;
+        scaleSettings = {};
         variationRanges = {};
         lastResolvedVariation = {};
         cycleVariationTelemetry.reset();

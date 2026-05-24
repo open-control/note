@@ -64,6 +64,7 @@ private:
     uint32_t next_scheduled_step_number_ = 0;
     uint32_t run_seed_ = 0;
     uint32_t published_cycle_index_ = UINT32_MAX;
+    bool cycle_variation_telemetry_published_ = false;
     std::array<uint32_t, CYCLE_MASK_CACHE_SIZE> cached_cycle_indices_{};
     std::array<StepBitMask128, CYCLE_MASK_CACHE_SIZE> cached_cycle_masks_{};
     size_t next_cycle_cache_slot_ = 0;

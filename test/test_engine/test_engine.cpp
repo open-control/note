@@ -6,6 +6,7 @@
 #include <oc/note/sequencer/SequencerEvent.hpp>
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
 #include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
+#include <oc/note/sequencer/StepSequencerScale.hpp>
 #include <oc/note/sequencer/StepSequencerVariation.hpp>
 
 using oc::note::sequencer::ISequencerEventSink;
@@ -13,6 +14,9 @@ using oc::note::sequencer::SequencerEvent;
 using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
 using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::StepSequencerScaleConstraintMode;
+using oc::note::sequencer::StepSequencerScaleSettings;
+using oc::note::sequencer::StepSequencerScaleType;
 using oc::note::sequencer::StepSequencerStepValues;
 using oc::note::sequencer::StepSequencerRuntimeState;
 using oc::note::sequencer::StepSequencerVariationRanges;
@@ -390,6 +394,102 @@ void test_variation_changes_scheduled_nudge() {
     TEST_ASSERT_EQUAL_INT8(expected.resolved.nudge, telemetry.resolved.nudge);
 }
 
+void test_cycle_variation_telemetry_can_be_disabled_and_reenabled_mid_cycle() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 100;
+    st.variationRanges = StepSequencerVariationRanges{
+        .pitchSemitones = 12,
+        .velocity = 32,
+        .gatePercent = 50,
+        .nudge = 0,
+    };
+    st.variationTelemetryEnabled = false;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL_UINT32(0, st.variationTelemetryRevision);
+    TEST_ASSERT_FALSE(st.cycleVariationTelemetry.validMask.test(0));
+
+    st.variationTelemetryEnabled = true;
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL_UINT32(1, st.variationTelemetryRevision);
+    TEST_ASSERT_TRUE(st.cycleVariationTelemetry.validMask.test(0));
+}
+
+void test_scale_constraint_changes_scheduled_note_and_telemetry() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 61;  // C# in C major, nearest tie resolves upward to D.
+    st.velocity[0] = 100;
+    st.gate[0] = 50;
+    st.scaleSettings = StepSequencerScaleSettings{
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+
+    const auto* on = firstEventOfType(sink.events, SequencerEventType::NoteOn);
+    TEST_ASSERT_NOT_NULL(on);
+    TEST_ASSERT_EQUAL_UINT8(62, on->note);
+
+    TEST_ASSERT_TRUE(st.lastResolvedVariation.triggered);
+    TEST_ASSERT_EQUAL_UINT8(61, st.lastResolvedVariation.scale.inputNote);
+    TEST_ASSERT_EQUAL_UINT8(62, st.lastResolvedVariation.scale.outputNote);
+    TEST_ASSERT_FALSE(st.lastResolvedVariation.scale.inputInScale);
+    TEST_ASSERT_TRUE(st.lastResolvedVariation.scale.constrained);
+    TEST_ASSERT_TRUE(st.cycleVariationTelemetry.validMask.test(0));
+    TEST_ASSERT_FALSE(st.cycleVariationTelemetry.scaleInMask.test(0));
+    TEST_ASSERT_TRUE(st.cycleVariationTelemetry.scaleConstrainedMask.test(0));
+    TEST_ASSERT_EQUAL_UINT8(62, st.cycleVariationTelemetry.resolvedNote[0]);
+}
+
+void test_free_scale_reports_out_of_scale_without_changing_scheduled_note() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 61;
+    st.velocity[0] = 100;
+    st.gate[0] = 50;
+    st.scaleSettings = StepSequencerScaleSettings{
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::Free,
+    };
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+
+    const auto* on = firstEventOfType(sink.events, SequencerEventType::NoteOn);
+    TEST_ASSERT_NOT_NULL(on);
+    TEST_ASSERT_EQUAL_UINT8(61, on->note);
+
+    TEST_ASSERT_FALSE(st.lastResolvedVariation.scale.inputInScale);
+    TEST_ASSERT_FALSE(st.lastResolvedVariation.scale.constrained);
+    TEST_ASSERT_FALSE(st.cycleVariationTelemetry.scaleInMask.test(0));
+    TEST_ASSERT_FALSE(st.cycleVariationTelemetry.scaleConstrainedMask.test(0));
+    TEST_ASSERT_EQUAL_UINT8(61, st.cycleVariationTelemetry.resolvedNote[0]);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_gate_zero_mutes_note);
@@ -402,5 +502,8 @@ int main() {
     RUN_TEST(test_stop_calls_all_notes_off_once);
     RUN_TEST(test_variation_changes_scheduled_note_velocity_gate_and_telemetry);
     RUN_TEST(test_variation_changes_scheduled_nudge);
+    RUN_TEST(test_cycle_variation_telemetry_can_be_disabled_and_reenabled_mid_cycle);
+    RUN_TEST(test_scale_constraint_changes_scheduled_note_and_telemetry);
+    RUN_TEST(test_free_scale_reports_out_of_scale_without_changing_scheduled_note);
     return UNITY_END();
 }

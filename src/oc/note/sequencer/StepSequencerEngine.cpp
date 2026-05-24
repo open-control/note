@@ -17,6 +17,7 @@ void StepSequencerEngine::reset() {
     next_step_tick_ = 0;
     next_scheduled_step_number_ = 0;
     published_cycle_index_ = UINT32_MAX;
+    cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
     state_.probabilityCycleMask = {};
@@ -126,13 +127,23 @@ bool StepSequencerEngine::shouldTriggerStep_(uint8_t stepIndex, uint32_t stepNum
 }
 
 void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
-    if (published_cycle_index_ == cycleIndex) return;
+    if (published_cycle_index_ == cycleIndex) {
+        if (state_.variationTelemetryEnabled && !cycle_variation_telemetry_published_) {
+            publishCycleVariationTelemetry_(cycleIndex, len, state_.probabilityCycleMask);
+            cycle_variation_telemetry_published_ = true;
+        }
+        return;
+    }
 
     published_cycle_index_ = cycleIndex;
     state_.probabilityCycleIndex = cycleIndex;
     state_.probabilityCycleMask = maskForCycle_(cycleIndex, len);
     state_.probabilityCycleRevision += 1U;
-    publishCycleVariationTelemetry_(cycleIndex, len, state_.probabilityCycleMask);
+    cycle_variation_telemetry_published_ = false;
+    if (state_.variationTelemetryEnabled) {
+        publishCycleVariationTelemetry_(cycleIndex, len, state_.probabilityCycleMask);
+        cycle_variation_telemetry_published_ = true;
+    }
 }
 
 void StepSequencerEngine::start_() {
@@ -143,6 +154,7 @@ void StepSequencerEngine::start_() {
     next_scheduled_step_number_ = 0;
     ++run_seed_;
     published_cycle_index_ = UINT32_MAX;
+    cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
 
@@ -160,6 +172,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
 
     last_tick_ = tick;
     published_cycle_index_ = UINT32_MAX;
+    cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
 
@@ -173,6 +186,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         state_.lastResolvedVariation = {};
         state_.cycleVariationTelemetry.reset();
         state_.variationTelemetryRevision += 1U;
+        cycle_variation_telemetry_published_ = false;
         return;
     }
 
@@ -199,6 +213,7 @@ void StepSequencerEngine::stop_() {
     emitAllNotesOff_(last_tick_);
     state_.playheadStep = -1;
     published_cycle_index_ = UINT32_MAX;
+    cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
     state_.probabilityCycleMask = {};
@@ -226,6 +241,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
         last_enabled_mask_ = enabledMask;
         clearCycleMaskCache_();
         published_cycle_index_ = UINT32_MAX;
+        cycle_variation_telemetry_published_ = false;
         if (len > 0) {
             const uint32_t currentStepNumber = next_step_tick_ / ticksPerStep;
             const uint32_t currentCycleIndex = currentStepNumber / static_cast<uint32_t>(len);
@@ -239,6 +255,7 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
         next_step_tick_ = 0;
         next_scheduled_step_number_ = 0;
         published_cycle_index_ = UINT32_MAX;
+        cycle_variation_telemetry_published_ = false;
         clearCycleMaskCache_();
         last_enabled_mask_ = state_.enabledMask;
         const uint8_t len = patternLength_();
@@ -348,6 +365,7 @@ StepSequencerResolvedVariation StepSequencerEngine::resolveVariation_(uint8_t st
             .nudge = state_.nudge[stepIndex],
         },
         state_.variationRanges,
+        state_.scaleSettings,
         StepSequencerRuntimeState::MAX_GATE_PERCENT,
         run_seed_,
         cycleIndex,
@@ -369,6 +387,8 @@ void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
     state_.cycleVariationTelemetry.cycleIndex = cycleIndex;
     state_.cycleVariationTelemetry.ranges = state_.variationRanges;
     state_.cycleVariationTelemetry.ranges.clamp();
+    state_.cycleVariationTelemetry.scaleSettings = state_.scaleSettings;
+    state_.cycleVariationTelemetry.scaleSettings.clamp();
 
     const uint8_t safeLen = std::min<uint8_t>(len, StepSequencerRuntimeState::MAX_STEPS);
     for (uint8_t stepIndex = 0; stepIndex < safeLen; ++stepIndex) {
