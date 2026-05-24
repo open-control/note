@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerScale.hpp"
 
 namespace oc::note::sequencer {
 
@@ -14,6 +15,8 @@ struct StepSequencerVariationRanges {
     static constexpr uint8_t MAX_GATE_PERCENT = 100;
     static constexpr uint8_t MAX_NUDGE = 50;
 
+    // Interpreted as semitones in Free/Chromatic mode and as scale degrees in
+    // constrained non-chromatic scale modes.
     uint8_t pitchSemitones = 0;
     uint8_t velocity = 0;
     uint8_t gatePercent = 0;
@@ -42,11 +45,14 @@ struct StepSequencerResolvedVariation {
     StepSequencerStepValues base{};
     StepSequencerStepValues resolved{};
     StepSequencerVariationRanges ranges{};
+    StepSequencerScaleSettings scaleSettings{};
+    StepSequencerScaleResolution scale{};
 
     int8_t pitchDelta = 0;
     int16_t velocityDelta = 0;
     int16_t gateDelta = 0;
     int8_t nudgeDelta = 0;
+    bool pitchVariationUsesScaleDegrees = false;
 };
 
 struct StepSequencerCycleVariationTelemetry {
@@ -55,7 +61,10 @@ struct StepSequencerCycleVariationTelemetry {
     uint32_t cycleIndex = 0;
     StepBitMask128 validMask{};
     StepBitMask128 triggeredMask{};
+    StepBitMask128 scaleInMask{};
+    StepBitMask128 scaleConstrainedMask{};
     StepSequencerVariationRanges ranges{};
+    StepSequencerScaleSettings scaleSettings{};
 
     std::array<uint8_t, MAX_STEPS> resolvedNote{};
     std::array<uint8_t, MAX_STEPS> resolvedVelocity{};
@@ -70,7 +79,10 @@ struct StepSequencerCycleVariationTelemetry {
         cycleIndex = 0;
         validMask = {};
         triggeredMask = {};
+        scaleInMask = {};
+        scaleConstrainedMask = {};
         ranges = {};
+        scaleSettings = {};
         resolvedNote.fill(0);
         resolvedVelocity.fill(0);
         resolvedGate.fill(0);
@@ -88,6 +100,8 @@ struct StepSequencerCycleVariationTelemetry {
         ranges = variation.ranges;
         validMask.setBit(variation.stepIndex, true);
         triggeredMask.setBit(variation.stepIndex, variation.triggered);
+        scaleInMask.setBit(variation.stepIndex, variation.scale.inputInScale);
+        scaleConstrainedMask.setBit(variation.stepIndex, variation.scale.constrained);
         resolvedNote[variation.stepIndex] = variation.resolved.note;
         resolvedVelocity[variation.stepIndex] = variation.resolved.velocity;
         resolvedGate[variation.stepIndex] = variation.resolved.gate;
@@ -151,6 +165,7 @@ inline int8_t clampNudge(int value) {
 inline StepSequencerResolvedVariation resolveStepVariation(
     StepSequencerStepValues base,
     StepSequencerVariationRanges ranges,
+    StepSequencerScaleSettings scaleSettings,
     uint16_t maxGatePercent,
     uint32_t runSeed,
     uint32_t cycleIndex,
@@ -158,6 +173,7 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     bool triggered = true
 ) {
     ranges.clamp();
+    scaleSettings.clamp();
 
     StepSequencerResolvedVariation result{};
     result.stepIndex = stepIndex;
@@ -166,11 +182,14 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     result.base = base;
     result.resolved = base;
     result.ranges = ranges;
+    result.scaleSettings = scaleSettings;
+    result.scale = resolveScaleNote(base.note, scaleSettings);
 
     if (!triggered) {
         return result;
     }
 
+    result.pitchVariationUsesScaleDegrees = scaleSettings.isConstrained();
     result.pitchDelta = static_cast<int8_t>(
         centeredDelta(runSeed, cycleIndex, stepIndex, ranges.pitchSemitones, 0x50495443u)
     );
@@ -182,12 +201,47 @@ inline StepSequencerResolvedVariation resolveStepVariation(
         centeredDelta(runSeed, cycleIndex, stepIndex, ranges.nudge, 0x4E554447u)
     );
 
-    result.resolved.note = clampMidi7(static_cast<int>(base.note) + result.pitchDelta);
+    if (result.pitchVariationUsesScaleDegrees) {
+        const auto anchor = resolveScaleNote(base.note, scaleSettings);
+        const uint8_t movedNote = moveByScaleDegrees(anchor.outputNote, result.pitchDelta, scaleSettings);
+        result.scale = anchor;
+        result.scale.outputNote = movedNote;
+        result.scale.semitoneDelta = static_cast<int8_t>(
+            static_cast<int>(movedNote) - static_cast<int>(base.note)
+        );
+        result.resolved.note = result.scale.outputNote;
+    } else {
+        const uint8_t variedNote = clampMidi7(static_cast<int>(base.note) + result.pitchDelta);
+        result.scale = resolveScaleNote(variedNote, scaleSettings);
+        result.resolved.note = result.scale.outputNote;
+    }
+
     result.resolved.velocity = clampMidi7(static_cast<int>(base.velocity) + result.velocityDelta);
     result.resolved.gate =
         clampGatePercent(static_cast<int>(base.gate) + result.gateDelta, maxGatePercent);
     result.resolved.nudge = clampNudge(static_cast<int>(base.nudge) + result.nudgeDelta);
     return result;
+}
+
+inline StepSequencerResolvedVariation resolveStepVariation(
+    StepSequencerStepValues base,
+    StepSequencerVariationRanges ranges,
+    uint16_t maxGatePercent,
+    uint32_t runSeed,
+    uint32_t cycleIndex,
+    uint8_t stepIndex,
+    bool triggered = true
+) {
+    return resolveStepVariation(
+        base,
+        ranges,
+        StepSequencerScaleSettings{},
+        maxGatePercent,
+        runSeed,
+        cycleIndex,
+        stepIndex,
+        triggered
+    );
 }
 
 }  // namespace oc::note::sequencer

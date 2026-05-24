@@ -4,9 +4,14 @@
 
 #include <oc/note/sequencer/StepSequencerVariation.hpp>
 
+using oc::note::sequencer::StepSequencerScaleConstraintMode;
+using oc::note::sequencer::StepSequencerScaleSettings;
+using oc::note::sequencer::StepSequencerScaleType;
 using oc::note::sequencer::StepSequencerResolvedVariation;
 using oc::note::sequencer::StepSequencerStepValues;
 using oc::note::sequencer::StepSequencerVariationRanges;
+using oc::note::sequencer::moveByScaleDegrees;
+using oc::note::sequencer::resolveScaleNote;
 using oc::note::sequencer::resolveStepVariation;
 
 namespace {
@@ -174,6 +179,53 @@ void test_range_inputs_are_clamped_before_resolution() {
     TEST_ASSERT_EQUAL_UINT8(50, out.ranges.nudge);
 }
 
+void test_free_scale_mode_keeps_pitch_variation_in_semitones() {
+    const StepSequencerStepValues base{.note = 60, .velocity = 100, .gate = 100, .nudge = 0};
+    const StepSequencerVariationRanges ranges{
+        .pitchSemitones = 2,
+        .velocity = 0,
+        .gatePercent = 0,
+        .nudge = 0,
+    };
+    const StepSequencerScaleSettings scale{
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::Free,
+    };
+
+    const auto out = resolveStepVariation(base, ranges, scale, MAX_GATE_PERCENT, 71, 9, 4);
+
+    TEST_ASSERT_FALSE(out.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(static_cast<int>(base.note) + out.pitchDelta),
+        out.resolved.note
+    );
+    TEST_ASSERT_EQUAL_UINT8(out.resolved.note, out.scale.outputNote);
+}
+
+void test_constrained_scale_mode_uses_pitch_variation_as_scale_degrees() {
+    const StepSequencerStepValues base{.note = 60, .velocity = 100, .gate = 100, .nudge = 0};
+    const StepSequencerVariationRanges ranges{
+        .pitchSemitones = 2,
+        .velocity = 0,
+        .gatePercent = 0,
+        .nudge = 0,
+    };
+    const StepSequencerScaleSettings scale{
+        .root = 0,
+        .type = StepSequencerScaleType::NaturalMinor,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+
+    const auto out = resolveStepVariation(base, ranges, scale, MAX_GATE_PERCENT, 71, 9, 4);
+    const uint8_t anchor = resolveScaleNote(base.note, scale).outputNote;
+    const uint8_t expected = moveByScaleDegrees(anchor, out.pitchDelta, scale);
+
+    TEST_ASSERT_TRUE(out.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_UINT8(expected, out.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(expected, out.scale.outputNote);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_zero_ranges_keep_base_values);
@@ -182,5 +234,7 @@ int main() {
     RUN_TEST(test_resolution_is_deterministic_for_same_inputs);
     RUN_TEST(test_untriggered_steps_keep_base_values_and_zero_deltas);
     RUN_TEST(test_range_inputs_are_clamped_before_resolution);
+    RUN_TEST(test_free_scale_mode_keeps_pitch_variation_in_semitones);
+    RUN_TEST(test_constrained_scale_mode_uses_pitch_variation_as_scale_degrees);
     return UNITY_END();
 }
