@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "StepSequencerExpander.hpp"
+
 namespace oc::note::sequencer {
 
 void StepSequencerEngine::clearCycleMaskCache_() {
@@ -317,16 +319,34 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
     const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
     if (stepIndex >= StepSequencerRuntimeState::MAX_STEPS) return;
 
+    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
+    const uint32_t stepStartTick = stepNumber * static_cast<uint32_t>(ticksPerStep);
+
+    if (graph_ != nullptr && graph_->enabled &&
+        graph_->sequence(graph_->rootSequenceId) != nullptr) {
+        const auto expansion = StepSequencerExpander::expandRootStep(
+            state_,
+            *graph_,
+            stepIndex,
+            cycleIndex,
+            ticksPerStep,
+            run_seed_,
+            true
+        );
+        for (uint8_t i = 0; i < expansion.count; ++i) {
+            scheduleExpandedNote_(stepStartTick, expansion.notes[i]);
+        }
+        return;
+    }
+
     if (!shouldTriggerStep_(stepIndex, stepNumber, len)) return;
 
-    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
     const auto variation = resolveVariation_(stepIndex, cycleIndex, true);
 
     const uint8_t ch = clampChannel_(state_.midiChannel);
     const uint8_t note = variation.resolved.note;
     const uint8_t vel = variation.resolved.velocity;
 
-    const uint32_t stepStartTick = stepNumber * static_cast<uint32_t>(ticksPerStep);
     const int32_t startOffset = nudgeTickOffset_(variation.resolved.nudge, ticksPerStep);
     int64_t onTickSigned = static_cast<int64_t>(stepStartTick) + static_cast<int64_t>(startOffset);
     if (onTickSigned < 0) {
@@ -345,6 +365,38 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
 
     const uint32_t offTick = onTick + offTicks;
     if (!scheduler_.scheduleNoteOff(offTick, ch, note, 0)) {
+        emitAllNotesOff_(offTick);
+        scheduler_.clear();
+    }
+}
+
+void StepSequencerEngine::scheduleExpandedNote_(uint32_t stepStartTick,
+                                                const StepSequencerExpandedNote& note) {
+    const auto& variation = note.variation;
+    const uint8_t ch = clampChannel_(state_.midiChannel);
+    const uint8_t midiNote = variation.resolved.note;
+    const uint8_t vel = variation.resolved.velocity;
+    const uint16_t spanTicks = (note.spanTicks == 0) ? 1U : note.spanTicks;
+    const uint32_t noteStartTick = stepStartTick + note.localTick;
+    const int32_t startOffset =
+        nudgeTickOffset_(variation.resolved.nudge, static_cast<uint8_t>(spanTicks));
+    int64_t onTickSigned = static_cast<int64_t>(noteStartTick) + static_cast<int64_t>(startOffset);
+    if (onTickSigned < 0) {
+        onTickSigned = 0;
+    }
+    const uint32_t onTick = static_cast<uint32_t>(onTickSigned);
+
+    if (!scheduler_.scheduleNoteOn(onTick, ch, midiNote, vel)) {
+        emitAllNotesOff_(onTick);
+        scheduler_.clear();
+        return;
+    }
+
+    uint32_t offTicks = (static_cast<uint32_t>(variation.resolved.gate) * spanTicks) / 100U;
+    if (offTicks == 0) offTicks = 1;
+
+    const uint32_t offTick = onTick + offTicks;
+    if (!scheduler_.scheduleNoteOff(offTick, ch, midiNote, 0)) {
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }

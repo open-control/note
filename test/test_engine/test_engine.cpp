@@ -5,6 +5,7 @@
 
 #include <oc/note/sequencer/SequencerEvent.hpp>
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
+#include <oc/note/sequencer/StepSequencerGraph.hpp>
 #include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
 #include <oc/note/sequencer/StepSequencerScale.hpp>
 #include <oc/note/sequencer/StepSequencerVariation.hpp>
@@ -14,6 +15,11 @@ using oc::note::sequencer::SequencerEvent;
 using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
 using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::STEP_NODE_CHILD_SEQUENCE;
+using oc::note::sequencer::STEP_NODE_CYCLE_SET;
+using oc::note::sequencer::STEP_NODE_NOTE_OFFSET;
+using oc::note::sequencer::StepSequencerGraph;
+using oc::note::sequencer::StepSequencerSequenceKind;
 using oc::note::sequencer::StepSequencerScaleConstraintMode;
 using oc::note::sequencer::StepSequencerScaleSettings;
 using oc::note::sequencer::StepSequencerScaleType;
@@ -490,6 +496,90 @@ void test_free_scale_reports_out_of_scale_without_changing_scheduled_note() {
     TEST_ASSERT_EQUAL_UINT8(61, st.cycleVariationTelemetry.resolvedNote[0]);
 }
 
+void test_graph_micro_sequence_schedules_multiple_notes_inside_step() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 2;
+    graph.stepNodeCount = 7;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    graph.sequences[1].kind = StepSequencerSequenceKind::MicroSequence;
+    graph.sequences[1].firstStepNode = 4;
+    graph.sequences[1].length = 3;
+    graph.stepNodes[0].flags = STEP_NODE_CHILD_SEQUENCE;
+    graph.stepNodes[0].childSequenceId = 1;
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 0;
+    graph.stepNodes[5].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[5].noteOffset = 2;
+    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[6].noteOffset = 4;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+    eng.update(2, true);
+    eng.update(4, true);
+
+    TEST_ASSERT_EQUAL(3, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
+    TEST_ASSERT_EQUAL_UINT8(64, sink.events[4].note);
+}
+
+void test_graph_cycle_state_is_applied_by_engine_scheduler() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 1;
+    graph.cycleSetCount = 1;
+    graph.stepNodeCount = 6;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    graph.cycleSets[0].firstStateNode = 4;
+    graph.cycleSets[0].length = 2;
+    graph.stepNodes[0].flags = STEP_NODE_CYCLE_SET;
+    graph.stepNodes[0].cycleSetId = 0;
+    graph.stepNodes[5].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[5].noteOffset = 7;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+    eng.update(24, true);
+
+    TEST_ASSERT_EQUAL(2, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+    TEST_ASSERT_EQUAL_UINT8(67, sink.events[2].note);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_gate_zero_mutes_note);
@@ -505,5 +595,7 @@ int main() {
     RUN_TEST(test_cycle_variation_telemetry_can_be_disabled_and_reenabled_mid_cycle);
     RUN_TEST(test_scale_constraint_changes_scheduled_note_and_telemetry);
     RUN_TEST(test_free_scale_reports_out_of_scale_without_changing_scheduled_note);
+    RUN_TEST(test_graph_micro_sequence_schedules_multiple_notes_inside_step);
+    RUN_TEST(test_graph_cycle_state_is_applied_by_engine_scheduler);
     return UNITY_END();
 }
