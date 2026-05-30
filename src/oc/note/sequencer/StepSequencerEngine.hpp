@@ -11,6 +11,9 @@
 
 namespace oc::note::sequencer {
 
+struct StepSequencerExpandedNote;
+struct StepSequencerGraph;
+
 class StepSequencerEngine {
 public:
     StepSequencerEngine(StepSequencerRuntimeState& state, ISequencerEventSink& eventSink)
@@ -21,6 +24,7 @@ public:
     void resyncToTick(uint32_t tick);
 
     void update(uint32_t tick, bool playing);
+    void setGraph(const StepSequencerGraph* graph) { graph_ = graph; }
 
     bool isPlaying() const { return playing_; }
 
@@ -33,6 +37,8 @@ private:
     void advanceToTick_(uint32_t tick);
     void primeSchedule_();
     void scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep);
+    void scheduleExpandedNote_(uint32_t stepStartTick,
+                               const StepSequencerExpandedNote& note);
     StepSequencerResolvedVariation resolveVariation_(uint8_t stepIndex,
                                                      uint32_t cycleIndex,
                                                      bool triggered) const;
@@ -56,6 +62,7 @@ private:
 
     StepSequencerRuntimeState& state_;
     ISequencerEventSink& event_sink_;
+    const StepSequencerGraph* graph_ = nullptr;
     NoteScheduler scheduler_;
 
     bool playing_ = false;
