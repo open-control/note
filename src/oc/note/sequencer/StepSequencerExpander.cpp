@@ -14,6 +14,11 @@ struct ResolvedStep {
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 };
 
+struct CycleResolution {
+    ResolvedStep step{};
+    uint32_t childLocalCycleIndex = 0;
+};
+
 uint8_t clampMidi7Offset(uint8_t base, int16_t offset) {
     const int value = static_cast<int>(base) + static_cast<int>(offset);
     if (value < 0) return 0;
@@ -140,26 +145,60 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     return out;
 }
 
-ResolvedStep applyCycleState(const StepSequencerGraph& graph,
-                             const ResolvedStep& parent,
-                             uint32_t localCycleIndex,
-                             StepSequencerScaleSettings scaleSettings) {
-    if (parent.cycleSetId == StepSequencerGraphLimits::INVALID_ID) {
-        return parent;
+bool ownsChildContent(const StepSequencerStepNode& node) {
+    return node.has(STEP_NODE_CHILD_SEQUENCE) || node.has(STEP_NODE_CYCLE_SET);
+}
+
+CycleResolution applyCycleStates(const StepSequencerGraph& graph,
+                                 const ResolvedStep& parent,
+                                 uint32_t localCycleIndex,
+                                 uint8_t depth,
+                                 StepSequencerScaleSettings scaleSettings,
+                                 StepSequencerExpansion& out) {
+    CycleResolution result{
+        .step = parent,
+        .childLocalCycleIndex = localCycleIndex,
+    };
+
+    uint32_t cycleCursor = localCycleIndex;
+    uint8_t appliedDepth = 0;
+    while (result.step.cycleSetId != StepSequencerGraphLimits::INVALID_ID) {
+        if (static_cast<uint16_t>(depth) + appliedDepth >= StepSequencerGraphLimits::MAX_DEPTH) {
+            out.depthLimitReached = true;
+            result.step.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
+            break;
+        }
+
+        const auto* set = graph.cycleSet(result.step.cycleSetId);
+        if (set == nullptr || set->length == 0) {
+            result.step.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
+            break;
+        }
+
+        const uint8_t stateOffset = static_cast<uint8_t>(cycleCursor % set->length);
+        const auto* stateNode =
+            graph.stepNode(static_cast<uint16_t>(set->firstStateNode + stateOffset));
+        if (stateNode == nullptr) {
+            result.step.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
+            break;
+        }
+
+        const uint32_t ownerActivationIndex = cycleCursor / set->length;
+        ResolvedStep stateParent = result.step;
+        stateParent.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
+        if (ownsChildContent(*stateNode)) {
+            // State-owned child content is a local exception: it replaces same-level
+            // default content and advances from this state's activation count.
+            stateParent.childSequenceId = StepSequencerGraphLimits::INVALID_ID;
+            result.childLocalCycleIndex = ownerActivationIndex;
+        }
+
+        result.step = applyNode(stateParent, *stateNode, scaleSettings);
+        cycleCursor = ownerActivationIndex;
+        ++appliedDepth;
     }
 
-    const auto* set = graph.cycleSet(parent.cycleSetId);
-    if (set == nullptr || set->length == 0) {
-        return parent;
-    }
-
-    const uint8_t stateOffset = static_cast<uint8_t>(localCycleIndex % set->length);
-    const auto* stateNode = graph.stepNode(static_cast<uint16_t>(set->firstStateNode + stateOffset));
-    if (stateNode == nullptr) {
-        return parent;
-    }
-
-    return applyNode(parent, *stateNode, scaleSettings);
+    return result;
 }
 
 bool appendNote(StepSequencerExpansion& out,
@@ -208,7 +247,9 @@ void expandStep(const StepSequencerGraph& graph,
                 StepSequencerExpansion& out) {
     if (out.noteBudgetExceeded) return;
 
-    ResolvedStep step = applyCycleState(graph, input, localCycleIndex, scaleSettings);
+    const CycleResolution cycleResolution =
+        applyCycleStates(graph, input, localCycleIndex, depth, scaleSettings, out);
+    ResolvedStep step = cycleResolution.step;
     if (!step.enabled || step.values.gate == 0) {
         return;
     }
@@ -267,7 +308,7 @@ void expandStep(const StepSequencerGraph& graph,
                 scaleSettings,
                 runSeed,
                 cycleIndex,
-                localCycleIndex,
+                cycleResolution.childLocalCycleIndex,
                 rootStepIndex,
                 i,
                 out

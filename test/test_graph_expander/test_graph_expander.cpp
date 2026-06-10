@@ -70,6 +70,24 @@ void attachSequence(StepSequencerGraph& graph,
     }
 }
 
+void attachCycleSet(StepSequencerGraph& graph,
+                    uint16_t parentNode,
+                    uint8_t cycleSetId,
+                    uint16_t firstState,
+                    uint8_t length) {
+    graph.stepNodes[parentNode].flags |= STEP_NODE_CYCLE_SET;
+    graph.stepNodes[parentNode].cycleSetId = cycleSetId;
+    if (graph.cycleSetCount <= cycleSetId) {
+        graph.cycleSetCount = static_cast<uint8_t>(cycleSetId + 1U);
+    }
+    graph.cycleSets[cycleSetId].firstStateNode = firstState;
+    graph.cycleSets[cycleSetId].length = length;
+    const uint16_t end = static_cast<uint16_t>(firstState + length);
+    if (graph.stepNodeCount < end) {
+        graph.stepNodeCount = end;
+    }
+}
+
 }  // namespace
 
 void setUp() {}
@@ -157,6 +175,73 @@ void test_micro_sequence_uses_effective_parent_gate_span() {
     TEST_ASSERT_EQUAL_UINT16(100, out.notes[2].variation.resolved.gate);
 }
 
+void test_micro_sequence_step_overrides_full_step_properties() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags =
+        STEP_NODE_NOTE_OFFSET | STEP_NODE_VELOCITY_OFFSET | STEP_NODE_GATE_OFFSET |
+        STEP_NODE_NUDGE_OFFSET;
+    graph.stepNodes[4].noteOffset = 7;
+    graph.stepNodes[4].velocityOffset = -20;
+    graph.stepNodes[4].gateOffset = 25;
+    graph.stepNodes[4].nudgeOffset = -12;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(67, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(76, out.notes[0].variation.resolved.velocity);
+    TEST_ASSERT_EQUAL_UINT16(125, out.notes[0].variation.resolved.gate);
+    TEST_ASSERT_EQUAL_INT8(-12, out.notes[0].variation.resolved.nudge);
+}
+
+void test_micro_sequence_step_can_mute_with_enabled_override() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_ENABLED_OVERRIDE;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(0, out.count);
+}
+
+void test_micro_sequence_probability_offset_can_mute_child_step() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_PROBABILITY_OFFSET;
+    graph.stepNodes[4].probabilityOffset = -100;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(0, out.count);
+}
+
+void test_micro_sequence_can_own_micro_sequence() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 2);
+    attachSequence(graph, 4, 2, 6, 2);
+    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[6].noteOffset = 0;
+    graph.stepNodes[7].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[7].noteOffset = 7;
+    graph.stepNodes[5].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[5].noteOffset = 12;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 8, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT32(0, out.notes[0].localTick);
+    TEST_ASSERT_EQUAL_UINT32(2, out.notes[1].localTick);
+    TEST_ASSERT_EQUAL_UINT32(4, out.notes[2].localTick);
+    TEST_ASSERT_EQUAL_UINT8(60, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(67, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(72, out.notes[2].variation.resolved.note);
+}
+
 void test_note_offset_is_semitone_in_free_scale() {
     auto state = baseState();
     state.scaleSettings = StepSequencerScaleSettings{
@@ -192,6 +277,28 @@ void test_note_offset_is_scale_degree_in_constrained_scale() {
 
     TEST_ASSERT_EQUAL_UINT8(1, out.count);
     TEST_ASSERT_EQUAL_UINT8(64, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_TRUE(out.notes[0].variation.pitchVariationUsesScaleDegrees);
+}
+
+void test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_degree() {
+    auto state = baseState();
+    state.scaleSettings = StepSequencerScaleSettings{
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 1;
+    attachCycleSet(graph, 0, 0, 5, 2);
+    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[6].noteOffset = 2;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(65, out.notes[0].variation.resolved.note);
     TEST_ASSERT_TRUE(out.notes[0].variation.pitchVariationUsesScaleDegrees);
 }
 
@@ -239,6 +346,44 @@ void test_inactive_cycle_state_mutes_step_for_cycle() {
     TEST_ASSERT_EQUAL_UINT8(1, active.count);
 }
 
+void test_cycle_state_probability_offset_can_mute_step() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    graph.cycleSetCount = 1;
+    graph.cycleSets[0].firstStateNode = 4;
+    graph.cycleSets[0].length = 2;
+    graph.stepNodeCount = 6;
+    graph.stepNodes[0].flags = STEP_NODE_CYCLE_SET;
+    graph.stepNodes[0].cycleSetId = 0;
+    graph.stepNodes[5].flags = STEP_NODE_PROBABILITY_OFFSET;
+    graph.stepNodes[5].probabilityOffset = -100;
+
+    const auto muted = StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, 1, true);
+    const auto active = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(0, muted.count);
+    TEST_ASSERT_EQUAL_UINT8(1, active.count);
+}
+
+void test_cycle_state_set_over_limit_is_ignored_safely() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(
+        graph,
+        0,
+        0,
+        4,
+        static_cast<uint8_t>(StepSequencerGraphLimits::MAX_CYCLE_STATES_PER_SET + 1U)
+    );
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 12;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(60, out.notes[0].variation.resolved.note);
+}
+
 void test_cycle_state_can_own_micro_sequence() {
     auto state = baseState();
     auto graph = graphWithRoot();
@@ -281,6 +426,103 @@ void test_micro_sequence_step_can_own_cycle_state() {
     TEST_ASSERT_EQUAL_UINT8(1, cycle1.count);
     TEST_ASSERT_EQUAL_UINT8(60, cycle0.notes[0].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(65, cycle1.notes[0].variation.resolved.note);
+}
+
+void test_cycle_state_can_own_cycle_state_with_owner_activation_count() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(graph, 0, 0, 4, 3);
+    attachCycleSet(graph, 5, 1, 7, 5);
+    for (uint8_t i = 0; i < 5; ++i) {
+        graph.stepNodes[7 + i].flags = STEP_NODE_NOTE_OFFSET;
+        graph.stepNodes[7 + i].noteOffset = static_cast<int8_t>(i);
+    }
+
+    const auto firstOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, 1, true);
+    const auto secondOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 4, 6, 1, true);
+    const auto thirdOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 7, 6, 1, true);
+    const auto nonOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 2, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, firstOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(1, secondOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(1, thirdOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(1, nonOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(60, firstOwnerPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(61, secondOwnerPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(62, thirdOwnerPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(60, nonOwnerPass.notes[0].variation.resolved.note);
+}
+
+void test_state_owned_cycle_state_replaces_same_level_micro_sequence() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 2);
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 0;
+    graph.stepNodes[5].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[5].noteOffset = 12;
+    attachCycleSet(graph, 0, 0, 6, 2);
+    attachCycleSet(graph, 7, 1, 8, 1);
+    graph.stepNodes[8].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[8].noteOffset = 5;
+
+    const auto defaultPass = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 8, 1, true);
+    const auto stateOwnedPass = StepSequencerExpander::expandRootStep(state, graph, 0, 1, 8, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(2, defaultPass.count);
+    TEST_ASSERT_EQUAL_UINT8(60, defaultPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(72, defaultPass.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(1, stateOwnedPass.count);
+    TEST_ASSERT_EQUAL_UINT8(65, stateOwnedPass.notes[0].variation.resolved.note);
+}
+
+void test_state_owned_micro_sequence_child_cycle_uses_owner_activation_count() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(graph, 0, 0, 4, 3);
+    attachSequence(graph, 5, 1, 7, 1);
+    attachCycleSet(graph, 7, 1, 8, 5);
+    for (uint8_t i = 0; i < 5; ++i) {
+        graph.stepNodes[8 + i].flags = STEP_NODE_NOTE_OFFSET;
+        graph.stepNodes[8 + i].noteOffset = static_cast<int8_t>(i);
+    }
+
+    const auto firstOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, 1, true);
+    const auto secondOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 4, 6, 1, true);
+    const auto thirdOwnerPass =
+        StepSequencerExpander::expandRootStep(state, graph, 0, 7, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, firstOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(1, secondOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(1, thirdOwnerPass.count);
+    TEST_ASSERT_EQUAL_UINT8(60, firstOwnerPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(61, secondOwnerPass.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(62, thirdOwnerPass.notes[0].variation.resolved.note);
+}
+
+void test_same_level_default_micro_sequence_keeps_parent_cycle_index() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    attachCycleSet(graph, 4, 1, 5, 5);
+    for (uint8_t i = 0; i < 5; ++i) {
+        graph.stepNodes[5 + i].flags = STEP_NODE_NOTE_OFFSET;
+        graph.stepNodes[5 + i].noteOffset = static_cast<int8_t>(i);
+    }
+    attachCycleSet(graph, 0, 0, 10, 3);
+    graph.stepNodes[11].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[11].noteOffset = 10;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 4, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(74, out.notes[0].variation.resolved.note);
 }
 
 void test_depth_limit_stops_before_unbounded_nesting() {
@@ -345,12 +587,23 @@ int main() {
     RUN_TEST(test_micro_sequence_positive_offset_moves_content_right);
     RUN_TEST(test_micro_sequence_negative_offset_moves_content_left);
     RUN_TEST(test_micro_sequence_uses_effective_parent_gate_span);
+    RUN_TEST(test_micro_sequence_step_overrides_full_step_properties);
+    RUN_TEST(test_micro_sequence_step_can_mute_with_enabled_override);
+    RUN_TEST(test_micro_sequence_probability_offset_can_mute_child_step);
+    RUN_TEST(test_micro_sequence_can_own_micro_sequence);
     RUN_TEST(test_note_offset_is_semitone_in_free_scale);
     RUN_TEST(test_note_offset_is_scale_degree_in_constrained_scale);
+    RUN_TEST(test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_degree);
     RUN_TEST(test_cycle_state_overrides_parent_values);
     RUN_TEST(test_inactive_cycle_state_mutes_step_for_cycle);
+    RUN_TEST(test_cycle_state_probability_offset_can_mute_step);
+    RUN_TEST(test_cycle_state_set_over_limit_is_ignored_safely);
     RUN_TEST(test_cycle_state_can_own_micro_sequence);
     RUN_TEST(test_micro_sequence_step_can_own_cycle_state);
+    RUN_TEST(test_cycle_state_can_own_cycle_state_with_owner_activation_count);
+    RUN_TEST(test_state_owned_cycle_state_replaces_same_level_micro_sequence);
+    RUN_TEST(test_state_owned_micro_sequence_child_cycle_uses_owner_activation_count);
+    RUN_TEST(test_same_level_default_micro_sequence_keeps_parent_cycle_index);
     RUN_TEST(test_depth_limit_stops_before_unbounded_nesting);
     RUN_TEST(test_note_budget_is_bounded);
     RUN_TEST(test_scale_and_variation_apply_after_expansion);
