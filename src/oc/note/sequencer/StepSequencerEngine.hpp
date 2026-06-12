@@ -43,6 +43,7 @@ private:
                                                      uint32_t cycleIndex,
                                                      bool triggered) const;
     void publishResolvedVariation_(uint8_t stepIndex, uint32_t cycleIndex, bool triggered);
+    void publishPlayheadTickPosition_(uint32_t tick, uint8_t ticksPerStep, uint8_t len);
     void publishCycleMask_(uint32_t cycleIndex, uint8_t len);
     void publishCycleVariationTelemetry_(uint32_t cycleIndex,
                                          uint8_t len,

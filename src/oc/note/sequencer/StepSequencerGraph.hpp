@@ -6,7 +6,7 @@
 namespace oc::note::sequencer {
 
 struct StepSequencerGraphLimits {
-    static constexpr uint8_t MAX_DEPTH = 3;
+    static constexpr uint8_t MAX_DEPTH = 4;
     static constexpr uint16_t MAX_STEP_NODES = 512;
     static constexpr uint8_t MAX_SEQUENCES = 32;
     static constexpr uint8_t MAX_CYCLE_SETS = 64;
@@ -30,6 +30,7 @@ struct StepSequencerSequence {
 struct StepSequencerCycleStateSet {
     uint16_t firstStateNode = StepSequencerGraphLimits::INVALID_ID;
     uint8_t length = 0;
+    int8_t offset = 0;
 };
 
 enum StepSequencerStepNodeFlags : uint16_t {

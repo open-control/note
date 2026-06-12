@@ -23,6 +23,8 @@ struct StepSequencerRuntimeState {
 
     uint8_t length = DEFAULT_LENGTH;
     int16_t playheadStep = -1;
+    uint16_t playheadStepTickOffset = 0;
+    uint16_t playheadStepTicks = 1;
     uint8_t stepsPerBeat = DEFAULT_STEPS_PER_BEAT;
     uint8_t midiChannel = DEFAULT_MIDI_CHANNEL_0BASED;
     StepBitMask128 enabledMask{};
@@ -53,6 +55,8 @@ struct StepSequencerRuntimeState {
     void reset() {
         length = DEFAULT_LENGTH;
         playheadStep = -1;
+        playheadStepTickOffset = 0;
+        playheadStepTicks = 1;
         stepsPerBeat = DEFAULT_STEPS_PER_BEAT;
         midiChannel = DEFAULT_MIDI_CHANNEL_0BASED;
         enabledMask = {};
