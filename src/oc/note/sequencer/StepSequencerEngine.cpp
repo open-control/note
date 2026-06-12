@@ -25,6 +25,8 @@ void StepSequencerEngine::reset() {
     state_.probabilityCycleMask = {};
     state_.probabilityCycleIndex = 0;
     state_.probabilityCycleRevision += 1U;
+    state_.playheadStepTickOffset = 0;
+    state_.playheadStepTicks = ticksPerStep_();
     state_.lastResolvedVariation = {};
     state_.cycleVariationTelemetry.reset();
     state_.variationTelemetryRevision += 1U;
@@ -182,6 +184,8 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         next_step_tick_ = 0;
         next_scheduled_step_number_ = 0;
         state_.playheadStep = -1;
+        state_.playheadStepTickOffset = 0;
+        state_.playheadStepTicks = ticksPerStep;
         state_.probabilityCycleMask = {};
         state_.probabilityCycleIndex = 0;
         state_.probabilityCycleRevision += 1U;
@@ -197,7 +201,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
     const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
 
     publishCycleMask_(cycleIndex, len);
-    state_.playheadStep = static_cast<int16_t>(stepIndex);
+    publishPlayheadTickPosition_(tick, ticksPerStep, len);
     publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
 
     next_step_tick_ = (stepNumber + 1U) * static_cast<uint32_t>(ticksPerStep);
@@ -214,6 +218,8 @@ void StepSequencerEngine::stop_() {
     scheduler_.clear();
     emitAllNotesOff_(last_tick_);
     state_.playheadStep = -1;
+    state_.playheadStepTickOffset = 0;
+    state_.playheadStepTicks = ticksPerStep_();
     published_cycle_index_ = UINT32_MAX;
     cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
@@ -275,6 +281,8 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     if (len == 0) {
         state_.playheadStep = -1;
+        state_.playheadStepTickOffset = 0;
+        state_.playheadStepTicks = ticksPerStep_();
         return;
     }
 
@@ -288,7 +296,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
         const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
 
         publishCycleMask_(cycleIndex, len);
-        state_.playheadStep = static_cast<int16_t>(stepIndex);
+        publishPlayheadTickPosition_(next_step_tick_, ticksPerStep, len);
         publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
 
         while (next_scheduled_step_number_ < stepNumber + 3U) {
@@ -300,6 +308,7 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
     }
 
     processDueEvents_(tick);
+    publishPlayheadTickPosition_(tick, ticksPerStep, len);
 }
 
 void StepSequencerEngine::primeSchedule_() {
@@ -430,6 +439,23 @@ void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
                                                     uint32_t cycleIndex,
                                                     bool triggered) {
     state_.lastResolvedVariation = resolveVariation_(stepIndex, cycleIndex, triggered);
+}
+
+void StepSequencerEngine::publishPlayheadTickPosition_(uint32_t tick,
+                                                       uint8_t ticksPerStep,
+                                                       uint8_t len) {
+    if (len == 0 || ticksPerStep == 0) {
+        state_.playheadStep = -1;
+        state_.playheadStepTickOffset = 0;
+        state_.playheadStepTicks = ticksPerStep == 0 ? 1 : ticksPerStep;
+        return;
+    }
+
+    const uint32_t stepNumber = tick / ticksPerStep;
+    state_.playheadStep = static_cast<int16_t>(stepNumber % len);
+    state_.playheadStepTickOffset =
+        static_cast<uint16_t>(tick - (stepNumber * static_cast<uint32_t>(ticksPerStep)));
+    state_.playheadStepTicks = ticksPerStep;
 }
 
 void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,

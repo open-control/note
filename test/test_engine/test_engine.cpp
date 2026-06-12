@@ -159,6 +159,35 @@ void test_boundary_order_note_off_before_next_step() {
     TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
 }
 
+void test_playhead_tick_position_tracks_offset_inside_current_step() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT16(0, st.playheadStepTickOffset);
+    TEST_ASSERT_EQUAL_UINT16(6, st.playheadStepTicks);
+
+    eng.update(2, true);
+    TEST_ASSERT_EQUAL(0, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT16(2, st.playheadStepTickOffset);
+    TEST_ASSERT_EQUAL_UINT16(6, st.playheadStepTicks);
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(1, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT16(0, st.playheadStepTickOffset);
+    TEST_ASSERT_EQUAL_UINT16(6, st.playheadStepTicks);
+
+    eng.update(6, false);
+    TEST_ASSERT_EQUAL(-1, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT16(0, st.playheadStepTickOffset);
+}
+
 void test_positive_nudge_delays_note_on_and_note_off() {
     StepSequencerRuntimeState st;
     st.length = 2;
@@ -586,6 +615,7 @@ int main() {
     RUN_TEST(test_velocity_zero_is_sent);
     RUN_TEST(test_note_off_follows_gate_percent);
     RUN_TEST(test_boundary_order_note_off_before_next_step);
+    RUN_TEST(test_playhead_tick_position_tracks_offset_inside_current_step);
     RUN_TEST(test_positive_nudge_delays_note_on_and_note_off);
     RUN_TEST(test_negative_nudge_triggers_before_quantized_boundary);
     RUN_TEST(test_note_off_stays_before_next_note_on_when_nudged);

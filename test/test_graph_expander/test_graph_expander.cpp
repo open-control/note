@@ -365,6 +365,23 @@ void test_cycle_state_probability_offset_can_mute_step() {
     TEST_ASSERT_EQUAL_UINT8(1, active.count);
 }
 
+void test_cycle_state_offset_moves_content_right() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(graph, 0, 0, 4, 4);
+    graph.cycleSets[0].offset = 1;
+    graph.stepNodes[7].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[7].noteOffset = 7;
+
+    const auto wrapped = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+    const auto next = StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, wrapped.count);
+    TEST_ASSERT_EQUAL_UINT8(67, wrapped.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(1, next.count);
+    TEST_ASSERT_EQUAL_UINT8(60, next.notes[0].variation.resolved.note);
+}
+
 void test_cycle_state_set_over_limit_is_ignored_safely() {
     auto state = baseState();
     auto graph = graphWithRoot();
@@ -531,8 +548,9 @@ void test_depth_limit_stops_before_unbounded_nesting() {
     attachSequence(graph, 0, 1, 4, 1);
     attachSequence(graph, 4, 2, 5, 1);
     attachSequence(graph, 5, 3, 6, 1);
-    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
-    graph.stepNodes[6].noteOffset = 12;
+    attachSequence(graph, 6, 4, 7, 1);
+    graph.stepNodes[7].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[7].noteOffset = 12;
 
     const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
 
@@ -597,6 +615,7 @@ int main() {
     RUN_TEST(test_cycle_state_overrides_parent_values);
     RUN_TEST(test_inactive_cycle_state_mutes_step_for_cycle);
     RUN_TEST(test_cycle_state_probability_offset_can_mute_step);
+    RUN_TEST(test_cycle_state_offset_moves_content_right);
     RUN_TEST(test_cycle_state_set_over_limit_is_ignored_safely);
     RUN_TEST(test_cycle_state_can_own_micro_sequence);
     RUN_TEST(test_micro_sequence_step_can_own_cycle_state);

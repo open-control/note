@@ -175,7 +175,11 @@ CycleResolution applyCycleStates(const StepSequencerGraph& graph,
             break;
         }
 
-        const uint8_t stateOffset = static_cast<uint8_t>(cycleCursor % set->length);
+        const uint8_t stateOffset = normalizeSequenceIndex(
+            static_cast<uint8_t>(cycleCursor % set->length),
+            set->offset,
+            set->length
+        );
         const auto* stateNode =
             graph.stepNode(static_cast<uint16_t>(set->firstStateNode + stateOffset));
         if (stateNode == nullptr) {
