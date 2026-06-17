@@ -20,6 +20,7 @@ void StepSequencerEngine::reset() {
     next_scheduled_step_number_ = 0;
     published_cycle_index_ = UINT32_MAX;
     cycle_variation_telemetry_published_ = false;
+    timing_context_valid_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
     state_.probabilityCycleMask = {};
@@ -29,6 +30,7 @@ void StepSequencerEngine::reset() {
     state_.playheadStepTicks = ticksPerStep_();
     state_.lastResolvedVariation = {};
     state_.cycleVariationTelemetry.reset();
+    state_.expandedVariationTelemetry.reset();
     state_.variationTelemetryRevision += 1U;
 }
 
@@ -41,6 +43,10 @@ void StepSequencerEngine::resyncToTick(uint32_t tick) {
 
 uint8_t StepSequencerEngine::clampChannel_(uint8_t ch) {
     return (ch > 15) ? 15 : ch;
+}
+
+uint8_t StepSequencerEngine::clampSwingPercent_(uint8_t swingPercent) {
+    return StepSequencerRuntimeState::clampSwingPercent(swingPercent);
 }
 
 uint8_t StepSequencerEngine::patternLength_() const {
@@ -67,6 +73,31 @@ int32_t StepSequencerEngine::nudgeTickOffset_(int8_t nudge, uint8_t ticksPerStep
     }
 
     return -(((-scaled) + 50) / 100);
+}
+
+uint32_t StepSequencerEngine::swingTickOffset_(uint8_t stepIndex,
+                                               uint8_t ticksPerStep,
+                                               uint8_t swingPercent) {
+    if ((stepIndex & 0x1U) == 0) return 0;
+    const uint32_t scaled =
+        static_cast<uint32_t>(ticksPerStep) * static_cast<uint32_t>(clampSwingPercent_(swingPercent));
+    return (scaled + 100U) / 200U;
+}
+
+uint32_t StepSequencerEngine::timedStepStartTick_(uint32_t stepNumber,
+                                                  uint8_t stepIndex,
+                                                  uint8_t ticksPerStep) const {
+    const uint32_t base = stepNumber * static_cast<uint32_t>(ticksPerStep);
+    const uint32_t swing =
+        swingTickOffset_(stepIndex, ticksPerStep, state_.effectiveSwingPercent);
+    const int32_t patternNudge =
+        nudgeTickOffset_(state_.patternNudgePercent, ticksPerStep);
+    int64_t signedTick =
+        static_cast<int64_t>(base) + static_cast<int64_t>(swing) + patternNudge;
+    if (signedTick < 0) {
+        signedTick = 0;
+    }
+    return static_cast<uint32_t>(signedTick);
 }
 
 uint32_t StepSequencerEngine::probabilityHash_(uint32_t runSeed, uint32_t cycleIndex, uint8_t stepIndex) {
@@ -173,6 +204,7 @@ void StepSequencerEngine::start_() {
 void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
+    rememberTimingContext_(ticksPerStep, len);
 
     last_tick_ = tick;
     published_cycle_index_ = UINT32_MAX;
@@ -191,6 +223,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         state_.probabilityCycleRevision += 1U;
         state_.lastResolvedVariation = {};
         state_.cycleVariationTelemetry.reset();
+        state_.expandedVariationTelemetry.reset();
         state_.variationTelemetryRevision += 1U;
         cycle_variation_telemetry_published_ = false;
         return;
@@ -229,6 +262,7 @@ void StepSequencerEngine::stop_() {
     state_.probabilityCycleRevision += 1U;
     state_.lastResolvedVariation = {};
     state_.cycleVariationTelemetry.reset();
+    state_.expandedVariationTelemetry.reset();
     state_.variationTelemetryRevision += 1U;
 }
 
@@ -244,6 +278,12 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
 
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
+    if (timingContextChanged_(ticksPerStep, len)) {
+        resyncTimingContext_(tick);
+        last_tick_ = tick;
+        return;
+    }
+
     const StepBitMask128 enabledMask = state_.enabledMask;
     if (enabledMask != last_enabled_mask_) {
         last_enabled_mask_ = enabledMask;
@@ -316,6 +356,7 @@ void StepSequencerEngine::primeSchedule_() {
     if (len == 0) return;
 
     const uint8_t ticksPerStep = ticksPerStep_();
+    rememberTimingContext_(ticksPerStep, len);
     scheduleStep_(0, ticksPerStep);
     scheduleStep_(1, ticksPerStep);
     next_scheduled_step_number_ = 2;
@@ -329,7 +370,7 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
     if (stepIndex >= StepSequencerRuntimeState::MAX_STEPS) return;
 
     const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
-    const uint32_t stepStartTick = stepNumber * static_cast<uint32_t>(ticksPerStep);
+    const uint32_t stepStartTick = timedStepStartTick_(stepNumber, stepIndex, ticksPerStep);
 
     if (graph_ != nullptr && graph_->enabled &&
         graph_->sequence(graph_->rootSequenceId) != nullptr) {
@@ -363,17 +404,11 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
     }
     const uint32_t onTick = static_cast<uint32_t>(onTickSigned);
 
-    if (!scheduler_.scheduleNoteOn(onTick, ch, note, vel)) {
-        emitAllNotesOff_(onTick);
-        scheduler_.clear();
-        return;
-    }
-
     uint32_t offTicks = (static_cast<uint32_t>(variation.resolved.gate) * ticksPerStep) / 100U;
     if (offTicks == 0) offTicks = 1;
 
     const uint32_t offTick = onTick + offTicks;
-    if (!scheduler_.scheduleNoteOff(offTick, ch, note, 0)) {
+    if (!scheduler_.scheduleNote(onTick, offTick, ch, note, vel)) {
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
@@ -395,17 +430,11 @@ void StepSequencerEngine::scheduleExpandedNote_(uint32_t stepStartTick,
     }
     const uint32_t onTick = static_cast<uint32_t>(onTickSigned);
 
-    if (!scheduler_.scheduleNoteOn(onTick, ch, midiNote, vel)) {
-        emitAllNotesOff_(onTick);
-        scheduler_.clear();
-        return;
-    }
-
     uint32_t offTicks = (static_cast<uint32_t>(variation.resolved.gate) * spanTicks) / 100U;
     if (offTicks == 0) offTicks = 1;
 
     const uint32_t offTick = onTick + offTicks;
-    if (!scheduler_.scheduleNoteOff(offTick, ch, midiNote, 0)) {
+    if (!scheduler_.scheduleNote(onTick, offTick, ch, midiNote, vel)) {
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
@@ -435,9 +464,56 @@ StepSequencerResolvedVariation StepSequencerEngine::resolveVariation_(uint8_t st
     );
 }
 
+void StepSequencerEngine::publishExpandedVariationTelemetry_(uint8_t stepIndex,
+                                                            uint32_t cycleIndex,
+                                                            bool triggered) {
+    state_.expandedVariationTelemetry.reset();
+    if (graph_ == nullptr ||
+        !graph_->enabled ||
+        graph_->sequence(graph_->rootSequenceId) == nullptr) {
+        return;
+    }
+
+    auto& telemetry = state_.expandedVariationTelemetry;
+    telemetry.valid = true;
+    telemetry.rootStepIndex = stepIndex;
+    telemetry.cycleIndex = cycleIndex;
+
+    const auto expansion = StepSequencerExpander::expandRootStep(
+        state_,
+        *graph_,
+        stepIndex,
+        cycleIndex,
+        ticksPerStep_(),
+        run_seed_,
+        triggered
+    );
+    const uint8_t count = std::min<uint8_t>(
+        expansion.count,
+        StepSequencerExpandedVariationTelemetry::MAX_NOTES
+    );
+    for (uint8_t i = 0; i < count; ++i) {
+        telemetry.store(
+            i,
+            expansion.notes[i].nodeId,
+            expansion.notes[i].localTick,
+            expansion.notes[i].spanTicks,
+            expansion.notes[i].variation
+        );
+    }
+}
+
 void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
                                                     uint32_t cycleIndex,
                                                     bool triggered) {
+    publishExpandedVariationTelemetry_(stepIndex, cycleIndex, triggered);
+    if (state_.expandedVariationTelemetry.valid) {
+        state_.lastResolvedVariation = state_.expandedVariationTelemetry.count > 0
+            ? state_.expandedVariationTelemetry.variation[0]
+            : resolveVariation_(stepIndex, cycleIndex, false);
+        return;
+    }
+
     state_.lastResolvedVariation = resolveVariation_(stepIndex, cycleIndex, triggered);
 }
 
@@ -469,13 +545,58 @@ void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
     state_.cycleVariationTelemetry.scaleSettings.clamp();
 
     const uint8_t safeLen = std::min<uint8_t>(len, StepSequencerRuntimeState::MAX_STEPS);
+    const bool graphActive =
+        graph_ != nullptr &&
+        graph_->enabled &&
+        graph_->sequence(graph_->rootSequenceId) != nullptr;
     for (uint8_t stepIndex = 0; stepIndex < safeLen; ++stepIndex) {
         const bool enabled = state_.enabledMask.test(stepIndex);
         const bool triggered = enabled && triggeredMask.test(stepIndex);
-        state_.cycleVariationTelemetry.store(resolveVariation_(stepIndex, cycleIndex, triggered));
+        if (graphActive) {
+            const auto expansion = StepSequencerExpander::expandRootStep(
+                state_,
+                *graph_,
+                stepIndex,
+                cycleIndex,
+                ticksPerStep_(),
+                run_seed_,
+                triggered
+            );
+            state_.cycleVariationTelemetry.store(
+                expansion.count > 0
+                    ? expansion.notes[0].variation
+                    : resolveVariation_(stepIndex, cycleIndex, false)
+            );
+        } else {
+            state_.cycleVariationTelemetry.store(
+                resolveVariation_(stepIndex, cycleIndex, triggered)
+            );
+        }
     }
 
     state_.variationTelemetryRevision += 1U;
+}
+
+bool StepSequencerEngine::timingContextChanged_(uint8_t ticksPerStep, uint8_t len) const {
+    if (!timing_context_valid_) return false;
+    return last_ticks_per_step_ != ticksPerStep ||
+           last_pattern_length_ != len ||
+           last_effective_swing_percent_ != state_.effectiveSwingPercent ||
+           last_pattern_nudge_percent_ != state_.patternNudgePercent;
+}
+
+void StepSequencerEngine::rememberTimingContext_(uint8_t ticksPerStep, uint8_t len) {
+    last_ticks_per_step_ = ticksPerStep;
+    last_pattern_length_ = len;
+    last_effective_swing_percent_ = state_.effectiveSwingPercent;
+    last_pattern_nudge_percent_ = state_.patternNudgePercent;
+    timing_context_valid_ = true;
+}
+
+void StepSequencerEngine::resyncTimingContext_(uint32_t tick) {
+    scheduler_.clear();
+    emitAllNotesOff_(tick);
+    prepareFromTick_(tick);
 }
 
 bool StepSequencerEngine::emitAllNotesOff_(uint32_t tick) {

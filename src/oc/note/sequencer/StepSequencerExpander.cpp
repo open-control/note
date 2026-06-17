@@ -7,9 +7,11 @@ namespace oc::note::sequencer {
 namespace {
 
 struct ResolvedStep {
+    uint16_t nodeId = StepSequencerGraphLimits::INVALID_ID;
     bool enabled = true;
     StepSequencerStepValues values{};
     uint8_t probability = StepSequencerRuntimeState::DEFAULT_PROBABILITY;
+    StepSequencerVariationRanges localVariation{};
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 };
@@ -17,6 +19,7 @@ struct ResolvedStep {
 struct CycleResolution {
     ResolvedStep step{};
     uint32_t childLocalCycleIndex = 0;
+    uint32_t variationIdentity = 0;
 };
 
 uint8_t clampMidi7Offset(uint8_t base, int16_t offset) {
@@ -81,6 +84,59 @@ uint16_t effectiveGateSpan(uint16_t spanTicks, uint16_t gatePercent) {
     return static_cast<uint16_t>(scaled);
 }
 
+StepSequencerVariationRanges combineVariationRanges(StepSequencerVariationRanges global,
+                                                    StepSequencerVariationRanges local) {
+    StepSequencerVariationRanges out{
+        .pitchSemitones = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.pitchSemitones) + local.pitchSemitones,
+                StepSequencerVariationRanges::MAX_PITCH_SEMITONES
+            )
+        ),
+        .velocity = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.velocity) + local.velocity,
+                StepSequencerVariationRanges::MAX_VELOCITY
+            )
+        ),
+        .gatePercent = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.gatePercent) + local.gatePercent,
+                StepSequencerVariationRanges::MAX_GATE_PERCENT
+            )
+        ),
+        .nudge = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.nudge) + local.nudge,
+                StepSequencerVariationRanges::MAX_NUDGE
+            )
+        ),
+    };
+    return out;
+}
+
+bool hasAnyVariationRange(const StepSequencerVariationRanges& ranges) {
+    return ranges.pitchSemitones > 0 ||
+           ranges.velocity > 0 ||
+           ranges.gatePercent > 0 ||
+           ranges.nudge > 0;
+}
+
+uint32_t mixVariationIdentity(uint32_t parent,
+                              uint32_t kindSalt,
+                              uint8_t index,
+                              uint8_t depth) {
+    uint32_t x = parent ^ (kindSalt * 2654435761u);
+    x ^= static_cast<uint32_t>(index) * 2246822519u;
+    x ^= static_cast<uint32_t>(depth) * 3266489917u;
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    x *= 3266489917u;
+    x ^= x >> 16;
+    return x;
+}
+
 uint32_t graphProbabilityHash(uint32_t runSeed,
                               uint32_t cycleIndex,
                               uint8_t rootStepIndex,
@@ -114,8 +170,10 @@ bool probabilityAllows(const ResolvedStep& step,
 
 ResolvedStep applyNode(const ResolvedStep& parent,
                        const StepSequencerStepNode& node,
+                       uint16_t nodeId,
                        StepSequencerScaleSettings scaleSettings) {
     ResolvedStep out = parent;
+    out.nodeId = nodeId;
 
     if (node.has(STEP_NODE_ENABLED_OVERRIDE)) {
         out.enabled = node.has(STEP_NODE_ENABLED_VALUE);
@@ -135,6 +193,8 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     if (node.has(STEP_NODE_PROBABILITY_OFFSET)) {
         out.probability = clampProbabilityOffset(out.probability, node.probabilityOffset);
     }
+    out.localVariation = node.localVariation;
+    out.localVariation.clamp();
     if (node.has(STEP_NODE_CHILD_SEQUENCE)) {
         out.childSequenceId = node.childSequenceId;
     }
@@ -149,15 +209,45 @@ bool ownsChildContent(const StepSequencerStepNode& node) {
     return node.has(STEP_NODE_CHILD_SEQUENCE) || node.has(STEP_NODE_CYCLE_SET);
 }
 
+ResolvedStep applyLocalVariationContext(const ResolvedStep& step,
+                                        StepSequencerScaleSettings scaleSettings,
+                                        uint32_t runSeed,
+                                        uint32_t cycleIndex,
+                                        uint8_t rootStepIndex,
+                                        uint32_t variationIdentity) {
+    if (!hasAnyVariationRange(step.localVariation)) return step;
+
+    ResolvedStep out = step;
+    const auto variation = resolveStepVariation(
+        out.values,
+        out.localVariation,
+        scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        runSeed,
+        cycleIndex,
+        rootStepIndex,
+        true,
+        variationIdentity
+    );
+    out.values = variation.resolved;
+    out.localVariation = {};
+    return out;
+}
+
 CycleResolution applyCycleStates(const StepSequencerGraph& graph,
                                  const ResolvedStep& parent,
                                  uint32_t localCycleIndex,
                                  uint8_t depth,
+                                 uint32_t variationIdentity,
+                                 uint32_t runSeed,
+                                 uint32_t cycleIndex,
+                                 uint8_t rootStepIndex,
                                  StepSequencerScaleSettings scaleSettings,
                                  StepSequencerExpansion& out) {
     CycleResolution result{
         .step = parent,
         .childLocalCycleIndex = localCycleIndex,
+        .variationIdentity = variationIdentity,
     };
 
     uint32_t cycleCursor = localCycleIndex;
@@ -180,8 +270,8 @@ CycleResolution applyCycleStates(const StepSequencerGraph& graph,
             set->offset,
             set->length
         );
-        const auto* stateNode =
-            graph.stepNode(static_cast<uint16_t>(set->firstStateNode + stateOffset));
+        const auto stateNodeId = static_cast<uint16_t>(set->firstStateNode + stateOffset);
+        const auto* stateNode = graph.stepNode(stateNodeId);
         if (stateNode == nullptr) {
             result.step.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
             break;
@@ -197,7 +287,24 @@ CycleResolution applyCycleStates(const StepSequencerGraph& graph,
             result.childLocalCycleIndex = ownerActivationIndex;
         }
 
-        result.step = applyNode(stateParent, *stateNode, scaleSettings);
+        const uint32_t stateVariationIdentity = mixVariationIdentity(
+            result.variationIdentity,
+            0x4359434Cu,
+            stateOffset,
+            static_cast<uint8_t>(depth + appliedDepth)
+        );
+        result.step = applyNode(stateParent, *stateNode, stateNodeId, scaleSettings);
+        result.variationIdentity = stateVariationIdentity;
+        if (result.step.cycleSetId != StepSequencerGraphLimits::INVALID_ID) {
+            result.step = applyLocalVariationContext(
+                result.step,
+                scaleSettings,
+                runSeed,
+                cycleIndex,
+                rootStepIndex,
+                result.variationIdentity
+            );
+        }
         cycleCursor = ownerActivationIndex;
         ++appliedDepth;
     }
@@ -214,6 +321,7 @@ bool appendNote(StepSequencerExpansion& out,
                 uint32_t runSeed,
                 uint32_t cycleIndex,
                 uint8_t rootStepIndex,
+                uint32_t variationIdentity,
                 bool triggered) {
     if (out.count >= out.notes.size()) {
         out.noteBudgetExceeded = true;
@@ -221,6 +329,7 @@ bool appendNote(StepSequencerExpansion& out,
     }
 
     auto& note = out.notes[out.count++];
+    note.nodeId = step.nodeId;
     note.localTick = localTick;
     note.spanTicks = std::max<uint16_t>(spanTicks, 1U);
     note.variation = resolveStepVariation(
@@ -231,7 +340,8 @@ bool appendNote(StepSequencerExpansion& out,
         runSeed,
         cycleIndex,
         rootStepIndex,
-        triggered
+        triggered,
+        variationIdentity
     );
     return true;
 }
@@ -248,11 +358,35 @@ void expandStep(const StepSequencerGraph& graph,
                 uint32_t localCycleIndex,
                 uint8_t rootStepIndex,
                 uint8_t ordinal,
+                uint32_t variationIdentity,
                 StepSequencerExpansion& out) {
     if (out.noteBudgetExceeded) return;
 
+    ResolvedStep contextInput = input;
+    if (contextInput.cycleSetId != StepSequencerGraphLimits::INVALID_ID) {
+        contextInput = applyLocalVariationContext(
+            contextInput,
+            scaleSettings,
+            runSeed,
+            cycleIndex,
+            rootStepIndex,
+            variationIdentity
+        );
+    }
+
     const CycleResolution cycleResolution =
-        applyCycleStates(graph, input, localCycleIndex, depth, scaleSettings, out);
+        applyCycleStates(
+            graph,
+            contextInput,
+            localCycleIndex,
+            depth,
+            variationIdentity,
+            runSeed,
+            cycleIndex,
+            rootStepIndex,
+            scaleSettings,
+            out
+        );
     ResolvedStep step = cycleResolution.step;
     if (!step.enabled || step.values.gate == 0) {
         return;
@@ -272,15 +406,25 @@ void expandStep(const StepSequencerGraph& graph,
                 step,
                 localTick,
                 spanTicks,
-                ranges,
+                combineVariationRanges(ranges, step.localVariation),
                 scaleSettings,
                 runSeed,
                 cycleIndex,
                 rootStepIndex,
+                cycleResolution.variationIdentity,
                 true
             );
             return;
         }
+
+        step = applyLocalVariationContext(
+            step,
+            scaleSettings,
+            runSeed,
+            cycleIndex,
+            rootStepIndex,
+            cycleResolution.variationIdentity
+        );
 
         const uint16_t childTotalSpan = effectiveGateSpan(spanTicks, step.values.gate);
         for (uint8_t i = 0; i < child->length; ++i) {
@@ -290,10 +434,17 @@ void expandStep(const StepSequencerGraph& graph,
             );
             if (childNode == nullptr) continue;
             ResolvedStep childBase = step;
+            childBase.localVariation = {};
             childBase.childSequenceId = StepSequencerGraphLimits::INVALID_ID;
             childBase.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
             childBase.values.gate = StepSequencerRuntimeState::DEFAULT_GATE_PERCENT;
-            const ResolvedStep childStep = applyNode(childBase, *childNode, scaleSettings);
+            const auto childNodeId = static_cast<uint16_t>(child->firstStepNode + sourceIndex);
+            const ResolvedStep childStep = applyNode(
+                childBase,
+                *childNode,
+                childNodeId,
+                scaleSettings
+            );
             const uint32_t childStart = boundaryTick(i, childTotalSpan, child->length);
             const uint32_t childEnd = boundaryTick(
                 static_cast<uint8_t>(i + 1U),
@@ -315,6 +466,12 @@ void expandStep(const StepSequencerGraph& graph,
                 cycleResolution.childLocalCycleIndex,
                 rootStepIndex,
                 i,
+                mixVariationIdentity(
+                    cycleResolution.variationIdentity,
+                    0x4D494352u,
+                    sourceIndex,
+                    static_cast<uint8_t>(depth + 1U)
+                ),
                 out
             );
             if (out.noteBudgetExceeded) return;
@@ -327,11 +484,12 @@ void expandStep(const StepSequencerGraph& graph,
         step,
         localTick,
         spanTicks,
-        ranges,
+        combineVariationRanges(ranges, step.localVariation),
         scaleSettings,
         runSeed,
         cycleIndex,
         rootStepIndex,
+        cycleResolution.variationIdentity,
         true
     );
 }
@@ -362,6 +520,7 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
     }
 
     ResolvedStep base{
+        .nodeId = static_cast<uint16_t>(root->firstStepNode + sourceRootIndex),
         .enabled = state.enabledMask.test(sourceRootIndex),
         .values = StepSequencerStepValues{
             .note = state.note[sourceRootIndex],
@@ -370,13 +529,19 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
             .nudge = state.nudge[sourceRootIndex],
         },
         .probability = StepSequencerRuntimeState::clampProbability(state.probability[sourceRootIndex]),
+        .localVariation = {},
         .childSequenceId = StepSequencerGraphLimits::INVALID_ID,
         .cycleSetId = StepSequencerGraphLimits::INVALID_ID,
     };
 
     const auto* rootNode = graph.stepNode(static_cast<uint16_t>(root->firstStepNode + sourceRootIndex));
     if (rootNode != nullptr) {
-        base = applyNode(base, *rootNode, state.scaleSettings);
+        base = applyNode(
+            base,
+            *rootNode,
+            static_cast<uint16_t>(root->firstStepNode + sourceRootIndex),
+            state.scaleSettings
+        );
     }
 
     expandStep(
@@ -392,6 +557,7 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         cycleIndex,
         rootStepIndex,
         0,
+        sourceRootIndex,
         out
     );
     return out;

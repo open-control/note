@@ -37,17 +37,26 @@ private:
     void advanceToTick_(uint32_t tick);
     void primeSchedule_();
     void scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep);
+    uint32_t timedStepStartTick_(uint32_t stepNumber,
+                                 uint8_t stepIndex,
+                                 uint8_t ticksPerStep) const;
     void scheduleExpandedNote_(uint32_t stepStartTick,
                                const StepSequencerExpandedNote& note);
     StepSequencerResolvedVariation resolveVariation_(uint8_t stepIndex,
                                                      uint32_t cycleIndex,
                                                      bool triggered) const;
     void publishResolvedVariation_(uint8_t stepIndex, uint32_t cycleIndex, bool triggered);
+    void publishExpandedVariationTelemetry_(uint8_t stepIndex,
+                                            uint32_t cycleIndex,
+                                            bool triggered);
     void publishPlayheadTickPosition_(uint32_t tick, uint8_t ticksPerStep, uint8_t len);
     void publishCycleMask_(uint32_t cycleIndex, uint8_t len);
     void publishCycleVariationTelemetry_(uint32_t cycleIndex,
                                          uint8_t len,
                                          const StepBitMask128& triggeredMask);
+    bool timingContextChanged_(uint8_t ticksPerStep, uint8_t len) const;
+    void rememberTimingContext_(uint8_t ticksPerStep, uint8_t len);
+    void resyncTimingContext_(uint32_t tick);
     void clearCycleMaskCache_();
     bool emitAllNotesOff_(uint32_t tick);
     bool processDueEvents_(uint32_t tick);
@@ -55,6 +64,10 @@ private:
     uint8_t ticksPerStep_() const;
     uint8_t patternLength_() const;
     static uint8_t clampChannel_(uint8_t ch);
+    static uint8_t clampSwingPercent_(uint8_t swingPercent);
+    static uint32_t swingTickOffset_(uint8_t stepIndex,
+                                     uint8_t ticksPerStep,
+                                     uint8_t swingPercent);
     static int32_t nudgeTickOffset_(int8_t nudge, uint8_t ticksPerStep);
     StepBitMask128 resolveCycleMask_(uint32_t cycleIndex, uint8_t len) const;
     StepBitMask128 maskForCycle_(uint32_t cycleIndex, uint8_t len);
@@ -73,6 +86,11 @@ private:
     uint32_t run_seed_ = 0;
     uint32_t published_cycle_index_ = UINT32_MAX;
     bool cycle_variation_telemetry_published_ = false;
+    bool timing_context_valid_ = false;
+    uint8_t last_ticks_per_step_ = 0;
+    uint8_t last_pattern_length_ = 0;
+    uint8_t last_effective_swing_percent_ = 0;
+    int8_t last_pattern_nudge_percent_ = 0;
     std::array<uint32_t, CYCLE_MASK_CACHE_SIZE> cached_cycle_indices_{};
     std::array<StepBitMask128, CYCLE_MASK_CACHE_SIZE> cached_cycle_masks_{};
     size_t next_cycle_cache_slot_ = 0;
