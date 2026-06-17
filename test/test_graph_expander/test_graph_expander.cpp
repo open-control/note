@@ -22,7 +22,9 @@ using oc::note::sequencer::StepSequencerScaleConstraintMode;
 using oc::note::sequencer::StepSequencerScaleSettings;
 using oc::note::sequencer::StepSequencerScaleType;
 using oc::note::sequencer::StepSequencerSequenceKind;
+using oc::note::sequencer::StepSequencerStepValues;
 using oc::note::sequencer::StepSequencerVariationRanges;
+using oc::note::sequencer::resolveStepVariation;
 
 namespace {
 
@@ -49,6 +51,21 @@ StepSequencerGraph graphWithRoot(uint8_t rootLength = 4) {
     graph.sequences[0].firstStepNode = 0;
     graph.sequences[0].length = rootLength;
     return graph;
+}
+
+uint32_t mixVariationIdentityForTest(uint32_t parent,
+                                     uint32_t kindSalt,
+                                     uint8_t index,
+                                     uint8_t depth) {
+    uint32_t x = parent ^ (kindSalt * 2654435761u);
+    x ^= static_cast<uint32_t>(index) * 2246822519u;
+    x ^= static_cast<uint32_t>(depth) * 3266489917u;
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    x *= 3266489917u;
+    x ^= x >> 16;
+    return x;
 }
 
 void attachSequence(StepSequencerGraph& graph,
@@ -599,6 +616,227 @@ void test_scale_and_variation_apply_after_expansion() {
     TEST_ASSERT_TRUE(out.notes[0].variation.scale.constrained);
 }
 
+void test_local_variation_combines_with_global_ranges() {
+    auto state = baseState();
+    state.variationRanges = StepSequencerVariationRanges{
+        .pitchSemitones = 34,
+        .velocity = 120,
+        .gatePercent = 90,
+        .nudge = 48,
+    };
+    auto graph = graphWithRoot();
+    graph.stepNodes[0].localVariation = StepSequencerVariationRanges{
+        .pitchSemitones = 6,
+        .velocity = 10,
+        .gatePercent = 15,
+        .nudge = 9,
+    };
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 9, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(36, out.notes[0].variation.ranges.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(127, out.notes[0].variation.ranges.velocity);
+    TEST_ASSERT_EQUAL_UINT8(100, out.notes[0].variation.ranges.gatePercent);
+    TEST_ASSERT_EQUAL_UINT8(50, out.notes[0].variation.ranges.nudge);
+}
+
+void test_parent_local_variation_inherits_into_micro_child_base() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[0].localVariation.pitchSemitones = 6;
+    graph.stepNodes[4].localVariation.velocity = 22;
+
+    constexpr uint32_t kRunSeed = 1;
+    const auto expectedParent = resolveStepVariation(
+        StepSequencerStepValues{
+            .note = 60,
+            .velocity = 96,
+            .gate = 100,
+            .nudge = 0,
+        },
+        StepSequencerVariationRanges{
+            .pitchSemitones = 6,
+            .velocity = 0,
+            .gatePercent = 0,
+            .nudge = 0,
+        },
+        state.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        kRunSeed,
+        0,
+        0,
+        true,
+        0
+    );
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, kRunSeed, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(expectedParent.resolved.note, out.notes[0].variation.base.note);
+    TEST_ASSERT_EQUAL_UINT8(expectedParent.resolved.note, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(22, out.notes[0].variation.ranges.velocity);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.gatePercent);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.nudge);
+}
+
+void test_parent_local_variation_inherits_into_cycle_state_base() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(graph, 0, 0, 4, 2);
+    graph.stepNodes[0].localVariation.pitchSemitones = 6;
+    graph.stepNodes[5].localVariation.gatePercent = 12;
+
+    constexpr uint32_t kRunSeed = 1;
+    const auto expectedParent = resolveStepVariation(
+        StepSequencerStepValues{
+            .note = 60,
+            .velocity = 96,
+            .gate = 100,
+            .nudge = 0,
+        },
+        StepSequencerVariationRanges{
+            .pitchSemitones = 6,
+            .velocity = 0,
+            .gatePercent = 0,
+            .nudge = 0,
+        },
+        state.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        kRunSeed,
+        1,
+        0,
+        true,
+        0
+    );
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 1, 6, kRunSeed, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(expectedParent.resolved.note, out.notes[0].variation.base.note);
+    TEST_ASSERT_EQUAL_UINT8(expectedParent.resolved.note, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.velocity);
+    TEST_ASSERT_EQUAL_UINT8(12, out.notes[0].variation.ranges.gatePercent);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.nudge);
+}
+
+void test_cycle_state_local_variation_sets_micro_sequence_pitch_origin() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachCycleSet(graph, 0, 0, 4, 2);
+    attachSequence(graph, 5, 1, 6, 2);
+    graph.stepNodes[5].localVariation.pitchSemitones = 6;
+    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[6].noteOffset = 0;
+    graph.stepNodes[7].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[7].noteOffset = 2;
+
+    constexpr uint32_t kRunSeed = 7;
+    constexpr uint32_t kCycleIndex = 1;
+    const uint32_t stateIdentity =
+        mixVariationIdentityForTest(0, 0x4359434Cu, 1, 0);
+    const auto expectedParent = resolveStepVariation(
+        StepSequencerStepValues{
+            .note = 60,
+            .velocity = 96,
+            .gate = 100,
+            .nudge = 0,
+        },
+        StepSequencerVariationRanges{
+            .pitchSemitones = 6,
+            .velocity = 0,
+            .gatePercent = 0,
+            .nudge = 0,
+        },
+        state.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        kRunSeed,
+        kCycleIndex,
+        0,
+        true,
+        stateIdentity
+    );
+
+    const auto out = StepSequencerExpander::expandRootStep(
+        state,
+        graph,
+        0,
+        kCycleIndex,
+        8,
+        kRunSeed,
+        true
+    );
+
+    TEST_ASSERT_EQUAL_UINT8(2, out.count);
+    TEST_ASSERT_EQUAL_UINT8(expectedParent.resolved.note, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(expectedParent.resolved.note + 2U),
+        out.notes[1].variation.resolved.note
+    );
+}
+
+void test_micro_sequence_steps_use_distinct_variation_identity() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 2);
+    graph.stepNodes[4].localVariation.pitchSemitones = 12;
+    graph.stepNodes[5].localVariation.pitchSemitones = 12;
+
+    constexpr uint32_t kRunSeed = 1;
+    const auto out = StepSequencerExpander::expandRootStep(
+        state,
+        graph,
+        0,
+        0,
+        8,
+        kRunSeed,
+        true
+    );
+
+    const StepSequencerStepValues expectedBase{
+        .note = 60,
+        .velocity = 96,
+        .gate = StepSequencerRuntimeState::DEFAULT_GATE_PERCENT,
+        .nudge = 0,
+    };
+    const StepSequencerVariationRanges expectedRanges{
+        .pitchSemitones = 12,
+        .velocity = 0,
+        .gatePercent = 0,
+        .nudge = 0,
+    };
+    const auto firstExpected = resolveStepVariation(
+        expectedBase,
+        expectedRanges,
+        state.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        kRunSeed,
+        0,
+        0,
+        true,
+        mixVariationIdentityForTest(0, 0x4D494352u, 0, 1)
+    );
+    const auto secondExpected = resolveStepVariation(
+        expectedBase,
+        expectedRanges,
+        state.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        kRunSeed,
+        0,
+        0,
+        true,
+        mixVariationIdentityForTest(0, 0x4D494352u, 1, 1)
+    );
+
+    TEST_ASSERT_EQUAL_UINT8(2, out.count);
+    TEST_ASSERT_TRUE(firstExpected.pitchDelta != secondExpected.pitchDelta);
+    TEST_ASSERT_EQUAL_INT8(firstExpected.pitchDelta, out.notes[0].variation.pitchDelta);
+    TEST_ASSERT_EQUAL_INT8(secondExpected.pitchDelta, out.notes[1].variation.pitchDelta);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_micro_sequence_expands_inside_parent_step);
@@ -626,5 +864,10 @@ int main() {
     RUN_TEST(test_depth_limit_stops_before_unbounded_nesting);
     RUN_TEST(test_note_budget_is_bounded);
     RUN_TEST(test_scale_and_variation_apply_after_expansion);
+    RUN_TEST(test_local_variation_combines_with_global_ranges);
+    RUN_TEST(test_parent_local_variation_inherits_into_micro_child_base);
+    RUN_TEST(test_parent_local_variation_inherits_into_cycle_state_base);
+    RUN_TEST(test_cycle_state_local_variation_sets_micro_sequence_pitch_origin);
+    RUN_TEST(test_micro_sequence_steps_use_distinct_variation_identity);
     return UNITY_END();
 }

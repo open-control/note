@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <oc/note/sequencer/SequencerEvent.hpp>
+#include <oc/note/sequencer/NoteScheduler.hpp>
 #include <oc/note/sequencer/StepSequencerEngine.hpp>
 #include <oc/note/sequencer/StepSequencerGraph.hpp>
 #include <oc/note/sequencer/StepSequencerRuntimeState.hpp>
@@ -11,6 +12,7 @@
 #include <oc/note/sequencer/StepSequencerVariation.hpp>
 
 using oc::note::sequencer::ISequencerEventSink;
+using oc::note::sequencer::NoteScheduler;
 using oc::note::sequencer::SequencerEvent;
 using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
@@ -56,11 +58,49 @@ const SequencerEvent* firstEventOfType(const std::vector<SequencerEvent>& events
     return nullptr;
 }
 
+uint32_t mixVariationIdentityForTest(uint32_t parent,
+                                     uint32_t kindSalt,
+                                     uint8_t index,
+                                     uint8_t depth) {
+    uint32_t x = parent ^ (kindSalt * 2654435761u);
+    x ^= static_cast<uint32_t>(index) * 2246822519u;
+    x ^= static_cast<uint32_t>(depth) * 3266489917u;
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    x *= 3266489917u;
+    x ^= x >> 16;
+    return x;
+}
+
 }  // namespace
 
 void setUp() {}
 
 void tearDown() {}
+
+void test_note_scheduler_tracks_same_pitch_by_channel() {
+    NoteScheduler scheduler;
+    MockEventSink sink;
+
+    TEST_ASSERT_TRUE(scheduler.scheduleNote(0, 10, 0, 60, 100));
+    TEST_ASSERT_TRUE(scheduler.scheduleNote(1, 11, 1, 60, 101));
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(1, sink));
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(0, countType(sink.events, SequencerEventType::NoteOff));
+    TEST_ASSERT_EQUAL(2, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[0].channel);
+    TEST_ASSERT_EQUAL_UINT8(1, sink.events[1].channel);
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(10, sink));
+    TEST_ASSERT_EQUAL(1, countType(sink.events, SequencerEventType::NoteOff));
+    TEST_ASSERT_EQUAL_UINT8(0, sink.events[2].channel);
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(11, sink));
+    TEST_ASSERT_EQUAL(2, countType(sink.events, SequencerEventType::NoteOff));
+    TEST_ASSERT_EQUAL_UINT8(1, sink.events[3].channel);
+}
 
 void test_gate_zero_mutes_note() {
     StepSequencerRuntimeState st;
@@ -128,6 +168,139 @@ void test_note_off_follows_gate_percent() {
     TEST_ASSERT_EQUAL_UINT8(0, sink.events[1].channel);
     TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
     TEST_ASSERT_EQUAL_UINT8(0, sink.events[1].velocity);
+}
+
+void test_extended_gate_can_release_after_pattern_boundary() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 3);
+    st.note[3] = 60;
+    st.velocity[3] = 100;
+    st.gate[3] = 200;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
+
+    eng.update(18, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT32(18, sink.events[0].tick);
+
+    eng.update(24, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+
+    eng.update(30, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT32(30, sink.events[1].tick);
+}
+
+void test_extended_gate_allows_x10_length() {
+    StepSequencerRuntimeState st;
+    st.length = 16;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 3);
+    st.note[3] = 60;
+    st.velocity[3] = 100;
+    st.gate[3] = 1000;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(18, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT32(18, sink.events[0].tick);
+
+    eng.update(77, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+
+    eng.update(78, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT32(78, sink.events[1].tick);
+}
+
+void test_same_pitch_overlap_retriggers_and_cancels_stale_note_off() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
+    st.note[0] = 60;
+    st.note[1] = 60;
+    st.velocity[0] = 100;
+    st.velocity[1] = 80;
+    st.gate[0] = 300;
+    st.gate[1] = 50;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT32(0, sink.events[0].tick);
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[2].type));
+    TEST_ASSERT_EQUAL_UINT32(6, sink.events[1].tick);
+    TEST_ASSERT_EQUAL_UINT32(6, sink.events[2].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[2].note);
+
+    eng.update(9, true);
+    TEST_ASSERT_EQUAL(4, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[3].type));
+    TEST_ASSERT_EQUAL_UINT32(9, sink.events[3].tick);
+
+    eng.update(18, true);
+    TEST_ASSERT_EQUAL(4, static_cast<int>(sink.events.size()));
+}
+
+void test_different_pitch_overlap_keeps_original_note_off() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
+    st.note[0] = 60;
+    st.note[1] = 62;
+    st.velocity[0] = 100;
+    st.velocity[1] = 80;
+    st.gate[0] = 300;
+    st.gate[1] = 50;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[1].note);
+
+    eng.update(9, true);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[2].type));
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
+
+    eng.update(18, true);
+    TEST_ASSERT_EQUAL(4, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[3].type));
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[3].note);
 }
 
 void test_boundary_order_note_off_before_next_step() {
@@ -290,6 +463,152 @@ void test_note_off_stays_before_next_note_on_when_nudged() {
     TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[2].type));
     TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
     TEST_ASSERT_EQUAL_UINT8(62, sink.events[2].note);
+}
+
+void test_reordered_same_pitch_nudge_preserves_delayed_note_on() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.effectiveSwingPercent = 100;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 1) | (1ULL << 2));
+    st.note[1] = 60;
+    st.note[2] = 60;
+    st.velocity[1] = 100;
+    st.velocity[2] = 80;
+    st.gate[1] = 100;
+    st.gate[2] = 100;
+    st.nudge[1] = 50;
+    st.nudge[2] = -50;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
+
+    eng.update(9, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[0].type));
+    TEST_ASSERT_EQUAL_UINT32(9, sink.events[0].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+    TEST_ASSERT_EQUAL_UINT8(80, sink.events[0].velocity);
+
+    eng.update(11, true);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[1].type));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOn), static_cast<uint8_t>(sink.events[2].type));
+    TEST_ASSERT_EQUAL_UINT32(11, sink.events[1].tick);
+    TEST_ASSERT_EQUAL_UINT32(11, sink.events[2].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[1].note);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[2].note);
+    TEST_ASSERT_EQUAL_UINT8(100, sink.events[2].velocity);
+
+    eng.update(15, true);
+    TEST_ASSERT_EQUAL(3, static_cast<int>(sink.events.size()));
+
+    eng.update(17, true);
+    TEST_ASSERT_EQUAL(4, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL(static_cast<uint8_t>(SequencerEventType::NoteOff), static_cast<uint8_t>(sink.events[3].type));
+    TEST_ASSERT_EQUAL_UINT32(17, sink.events[3].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[3].note);
+}
+
+void test_swing_delays_odd_steps() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.effectiveSwingPercent = 50;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
+    st.note[0] = 60;
+    st.note[1] = 62;
+    st.velocity[0] = 100;
+    st.velocity[1] = 100;
+    st.gate[0] = 200;
+    st.gate[1] = 50;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL_UINT32(0, sink.events[0].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+
+    eng.update(7, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+
+    eng.update(8, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL_UINT32(8, sink.events[1].tick);
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[1].note);
+}
+
+void test_pattern_nudge_moves_whole_step_before_step_nudge() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.patternNudgePercent = 50;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 0) | (1ULL << 1));
+    st.note[0] = 60;
+    st.note[1] = 62;
+    st.velocity[0] = 100;
+    st.velocity[1] = 100;
+    st.gate[0] = 100;
+    st.gate[1] = 50;
+    st.nudge[1] = -50;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    TEST_ASSERT_EQUAL(0, static_cast<int>(sink.events.size()));
+
+    eng.update(3, true);
+    TEST_ASSERT_EQUAL(1, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL_UINT32(3, sink.events[0].tick);
+    TEST_ASSERT_EQUAL_UINT8(60, sink.events[0].note);
+
+    eng.update(6, true);
+    TEST_ASSERT_EQUAL(2, static_cast<int>(sink.events.size()));
+    TEST_ASSERT_EQUAL_UINT32(6, sink.events[1].tick);
+    TEST_ASSERT_EQUAL_UINT8(62, sink.events[1].note);
+}
+
+void test_division_change_to_slower_grid_resyncs_scheduler() {
+    StepSequencerRuntimeState st;
+    st.length = 16;
+    st.stepsPerBeat = 8;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(0xFFFFULL);
+    for (uint8_t i = 0; i < st.length; ++i) {
+        st.note[i] = static_cast<uint8_t>(60 + i);
+        st.velocity[i] = 100;
+        st.gate[i] = 50;
+    }
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    eng.update(0, true);
+    eng.update(24, true);
+    sink.events.clear();
+
+    st.stepsPerBeat = 1;
+    eng.update(25, true);
+    TEST_ASSERT_TRUE(countType(sink.events, SequencerEventType::AllNotesOff) > 0);
+
+    sink.events.clear();
+    eng.update(31, true);
+    sink.events.clear();
+
+    eng.update(72, true);
+    TEST_ASSERT_TRUE(countType(sink.events, SequencerEventType::NoteOn) > 0);
 }
 
 void test_stop_calls_all_notes_off_once() {
@@ -609,16 +928,98 @@ void test_graph_cycle_state_is_applied_by_engine_scheduler() {
     TEST_ASSERT_EQUAL_UINT8(67, sink.events[2].note);
 }
 
+void test_graph_expanded_variation_telemetry_tracks_nested_micro_node() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 2;
+    graph.cycleSetCount = 1;
+    graph.stepNodeCount = 7;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    graph.sequences[1].kind = StepSequencerSequenceKind::MicroSequence;
+    graph.sequences[1].firstStepNode = 5;
+    graph.sequences[1].length = 2;
+    graph.cycleSets[0].firstStateNode = 4;
+    graph.cycleSets[0].length = 1;
+    graph.stepNodes[0].flags = STEP_NODE_CYCLE_SET;
+    graph.stepNodes[0].cycleSetId = 0;
+    graph.stepNodes[4].flags = STEP_NODE_CHILD_SEQUENCE;
+    graph.stepNodes[4].childSequenceId = 1;
+    graph.stepNodes[4].localVariation.pitchSemitones = 6;
+    graph.stepNodes[5].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[5].noteOffset = 0;
+    graph.stepNodes[6].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[6].noteOffset = 2;
+
+    const auto expectedParent = resolveStepVariation(
+        StepSequencerStepValues{.note = 60, .velocity = 96, .gate = 100, .nudge = 0},
+        StepSequencerVariationRanges{
+            .pitchSemitones = 6,
+            .velocity = 0,
+            .gatePercent = 0,
+            .nudge = 0,
+        },
+        st.scaleSettings,
+        StepSequencerRuntimeState::MAX_GATE_PERCENT,
+        1,
+        0,
+        0,
+        true,
+        mixVariationIdentityForTest(0, 0x4359434Cu, 0, 0)
+    );
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+
+    TEST_ASSERT_TRUE(st.expandedVariationTelemetry.valid);
+    TEST_ASSERT_EQUAL_UINT8(0, st.expandedVariationTelemetry.rootStepIndex);
+    TEST_ASSERT_EQUAL_UINT8(2, st.expandedVariationTelemetry.count);
+    TEST_ASSERT_EQUAL_UINT16(5, st.expandedVariationTelemetry.nodeId[0]);
+    TEST_ASSERT_EQUAL_UINT16(6, st.expandedVariationTelemetry.nodeId[1]);
+    TEST_ASSERT_EQUAL_UINT8(
+        expectedParent.resolved.note,
+        st.expandedVariationTelemetry.variation[0].resolved.note
+    );
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(expectedParent.resolved.note + 2U),
+        st.expandedVariationTelemetry.variation[1].resolved.note
+    );
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_note_scheduler_tracks_same_pitch_by_channel);
     RUN_TEST(test_gate_zero_mutes_note);
     RUN_TEST(test_velocity_zero_is_sent);
     RUN_TEST(test_note_off_follows_gate_percent);
+    RUN_TEST(test_extended_gate_can_release_after_pattern_boundary);
+    RUN_TEST(test_extended_gate_allows_x10_length);
+    RUN_TEST(test_same_pitch_overlap_retriggers_and_cancels_stale_note_off);
+    RUN_TEST(test_different_pitch_overlap_keeps_original_note_off);
     RUN_TEST(test_boundary_order_note_off_before_next_step);
     RUN_TEST(test_playhead_tick_position_tracks_offset_inside_current_step);
     RUN_TEST(test_positive_nudge_delays_note_on_and_note_off);
     RUN_TEST(test_negative_nudge_triggers_before_quantized_boundary);
     RUN_TEST(test_note_off_stays_before_next_note_on_when_nudged);
+    RUN_TEST(test_reordered_same_pitch_nudge_preserves_delayed_note_on);
+    RUN_TEST(test_swing_delays_odd_steps);
+    RUN_TEST(test_pattern_nudge_moves_whole_step_before_step_nudge);
+    RUN_TEST(test_division_change_to_slower_grid_resyncs_scheduler);
     RUN_TEST(test_stop_calls_all_notes_off_once);
     RUN_TEST(test_variation_changes_scheduled_note_velocity_gate_and_telemetry);
     RUN_TEST(test_variation_changes_scheduled_nudge);
@@ -627,5 +1028,6 @@ int main() {
     RUN_TEST(test_free_scale_reports_out_of_scale_without_changing_scheduled_note);
     RUN_TEST(test_graph_micro_sequence_schedules_multiple_notes_inside_step);
     RUN_TEST(test_graph_cycle_state_is_applied_by_engine_scheduler);
+    RUN_TEST(test_graph_expanded_variation_telemetry_tracks_nested_micro_node);
     return UNITY_END();
 }

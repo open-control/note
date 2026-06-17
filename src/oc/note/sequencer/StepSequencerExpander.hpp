@@ -10,6 +10,7 @@
 namespace oc::note::sequencer {
 
 struct StepSequencerExpandedNote {
+    uint16_t nodeId = StepSequencerGraphLimits::INVALID_ID;
     uint32_t localTick = 0;
     uint16_t spanTicks = 1;
     StepSequencerResolvedVariation variation{};

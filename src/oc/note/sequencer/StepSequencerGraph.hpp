@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 
+#include "StepSequencerVariation.hpp"
+
 namespace oc::note::sequencer {
 
 struct StepSequencerGraphLimits {
@@ -52,6 +54,7 @@ struct StepSequencerStepNode {
     int16_t gateOffset = 0;
     int8_t nudgeOffset = 0;
     int16_t probabilityOffset = 0;
+    StepSequencerVariationRanges localVariation{};
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 

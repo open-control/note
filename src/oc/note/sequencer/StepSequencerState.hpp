@@ -23,7 +23,7 @@ using oc::state::Signal;
  */
 struct StepSequencerState {
     static constexpr uint8_t MAX_STEPS = 128;
-    static constexpr uint16_t MAX_GATE_PERCENT = 200;
+    static constexpr uint16_t MAX_GATE_PERCENT = 1600;
 
     // Defaults
     static constexpr uint8_t DEFAULT_LENGTH = 8;

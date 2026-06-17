@@ -115,11 +115,11 @@ struct StepSequencerCycleVariationTelemetry {
 
 inline uint32_t variationHash(uint32_t runSeed,
                               uint32_t cycleIndex,
-                              uint8_t stepIndex,
+                              uint32_t stepIdentity,
                               uint32_t propertySalt) {
     uint32_t x = runSeed * 747796405u;
     x ^= cycleIndex * 2891336453u;
-    x ^= static_cast<uint32_t>(stepIndex) * 277803737u;
+    x ^= stepIdentity * 277803737u;
     x ^= propertySalt * 1597334677u;
     x ^= 0x9E3779B9u;
     x ^= x >> 16;
@@ -132,14 +132,14 @@ inline uint32_t variationHash(uint32_t runSeed,
 
 inline int16_t centeredDelta(uint32_t runSeed,
                              uint32_t cycleIndex,
-                             uint8_t stepIndex,
+                             uint32_t stepIdentity,
                              uint8_t range,
                              uint32_t propertySalt) {
     if (range == 0) return 0;
 
     const uint16_t width = static_cast<uint16_t>(range) * 2U + 1U;
     const uint16_t value = static_cast<uint16_t>(
-        variationHash(runSeed, cycleIndex, stepIndex, propertySalt) % width
+        variationHash(runSeed, cycleIndex, stepIdentity, propertySalt) % width
     );
     return static_cast<int16_t>(value) - static_cast<int16_t>(range);
 }
@@ -170,7 +170,8 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     uint32_t runSeed,
     uint32_t cycleIndex,
     uint8_t stepIndex,
-    bool triggered = true
+    bool triggered = true,
+    uint32_t stepIdentity = UINT32_MAX
 ) {
     ranges.clamp();
     scaleSettings.clamp();
@@ -189,16 +190,20 @@ inline StepSequencerResolvedVariation resolveStepVariation(
         return result;
     }
 
+    if (stepIdentity == UINT32_MAX) {
+        stepIdentity = stepIndex;
+    }
+
     result.pitchVariationUsesScaleDegrees = scaleSettings.isConstrained();
     result.pitchDelta = static_cast<int8_t>(
-        centeredDelta(runSeed, cycleIndex, stepIndex, ranges.pitchSemitones, 0x50495443u)
+        centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.pitchSemitones, 0x50495443u)
     );
     result.velocityDelta =
-        centeredDelta(runSeed, cycleIndex, stepIndex, ranges.velocity, 0x56454C4Fu);
+        centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.velocity, 0x56454C4Fu);
     result.gateDelta =
-        centeredDelta(runSeed, cycleIndex, stepIndex, ranges.gatePercent, 0x47415445u);
+        centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.gatePercent, 0x47415445u);
     result.nudgeDelta = static_cast<int8_t>(
-        centeredDelta(runSeed, cycleIndex, stepIndex, ranges.nudge, 0x4E554447u)
+        centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.nudge, 0x4E554447u)
     );
 
     if (result.pitchVariationUsesScaleDegrees) {
@@ -230,7 +235,8 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     uint32_t runSeed,
     uint32_t cycleIndex,
     uint8_t stepIndex,
-    bool triggered = true
+    bool triggered = true,
+    uint32_t stepIdentity = UINT32_MAX
 ) {
     return resolveStepVariation(
         base,
@@ -240,7 +246,8 @@ inline StepSequencerResolvedVariation resolveStepVariation(
         runSeed,
         cycleIndex,
         stepIndex,
-        triggered
+        triggered,
+        stepIdentity
     );
 }
 
