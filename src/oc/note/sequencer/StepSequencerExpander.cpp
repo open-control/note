@@ -337,7 +337,12 @@ bool appendExpandedVoice(StepSequencerExpansion& out,
                          const ResolvedStep& step,
                          const StepSequencerResolvedVariation& variation,
                          uint32_t localTick,
-                         uint16_t spanTicks) {
+                         uint16_t spanTicks,
+                         StepSequencerChordSource chordSource,
+                         uint8_t chordVoiceIndex,
+                         uint8_t chordVoiceCount,
+                         int16_t chordInterval,
+                         bool chordIntervalUsesScaleDegrees) {
     if (out.count >= out.notes.size()) {
         out.noteBudgetExceeded = true;
         return false;
@@ -348,6 +353,11 @@ bool appendExpandedVoice(StepSequencerExpansion& out,
     note.localTick = localTick;
     note.spanTicks = std::max<uint16_t>(spanTicks, 1U);
     note.variation = variation;
+    note.chordSource = chordSource;
+    note.chordVoiceIndex = chordVoiceIndex;
+    note.chordVoiceCount = chordVoiceCount == 0 ? 1 : chordVoiceCount;
+    note.chordInterval = chordInterval;
+    note.chordIntervalUsesScaleDegrees = chordIntervalUsesScaleDegrees;
     return true;
 }
 
@@ -394,7 +404,12 @@ bool appendNote(StepSequencerExpansion& out,
                 step,
                 voiceVariation,
                 localTick + chord.voices[i].delayTicks,
-                spanTicks
+                spanTicks,
+                chord.source,
+                i,
+                chord.count,
+                chord.voices[i].interval,
+                chord.voices[i].intervalUsesScaleDegrees
             )) {
             return false;
         }

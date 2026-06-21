@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerChord.hpp"
 #include "StepSequencerScale.hpp"
 #include "StepSequencerVariation.hpp"
 
@@ -21,6 +22,11 @@ struct StepSequencerExpandedVariationTelemetry {
     std::array<uint32_t, MAX_NOTES> localTick{};
     std::array<uint16_t, MAX_NOTES> spanTicks{};
     std::array<StepSequencerResolvedVariation, MAX_NOTES> variation{};
+    std::array<StepSequencerChordSource, MAX_NOTES> chordSource{};
+    std::array<uint8_t, MAX_NOTES> chordVoiceIndex{};
+    std::array<uint8_t, MAX_NOTES> chordVoiceCount{};
+    std::array<int16_t, MAX_NOTES> chordInterval{};
+    std::array<bool, MAX_NOTES> chordIntervalUsesScaleDegrees{};
 
     void reset() {
         valid = false;
@@ -31,18 +37,33 @@ struct StepSequencerExpandedVariationTelemetry {
         localTick.fill(0);
         spanTicks.fill(1);
         variation.fill({});
+        chordSource.fill(StepSequencerChordSource::Single);
+        chordVoiceIndex.fill(0);
+        chordVoiceCount.fill(1);
+        chordInterval.fill(0);
+        chordIntervalUsesScaleDegrees.fill(false);
     }
 
     void store(uint8_t index,
                uint16_t sourceNodeId,
                uint32_t sourceLocalTick,
                uint16_t sourceSpanTicks,
-               const StepSequencerResolvedVariation& sourceVariation) {
+               const StepSequencerResolvedVariation& sourceVariation,
+               StepSequencerChordSource sourceChordSource = StepSequencerChordSource::Single,
+               uint8_t sourceChordVoiceIndex = 0,
+               uint8_t sourceChordVoiceCount = 1,
+               int16_t sourceChordInterval = 0,
+               bool sourceChordIntervalUsesScaleDegrees = false) {
         if (index >= MAX_NOTES) return;
         nodeId[index] = sourceNodeId;
         localTick[index] = sourceLocalTick;
         spanTicks[index] = sourceSpanTicks == 0 ? 1 : sourceSpanTicks;
         variation[index] = sourceVariation;
+        chordSource[index] = sourceChordSource;
+        chordVoiceIndex[index] = sourceChordVoiceIndex;
+        chordVoiceCount[index] = sourceChordVoiceCount == 0 ? 1 : sourceChordVoiceCount;
+        chordInterval[index] = sourceChordInterval;
+        chordIntervalUsesScaleDegrees[index] = sourceChordIntervalUsesScaleDegrees;
         if (count <= index) {
             count = static_cast<uint8_t>(index + 1U);
         }

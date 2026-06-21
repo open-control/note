@@ -14,6 +14,11 @@ struct StepSequencerExpandedNote {
     uint32_t localTick = 0;
     uint16_t spanTicks = 1;
     StepSequencerResolvedVariation variation{};
+    StepSequencerChordSource chordSource = StepSequencerChordSource::Single;
+    uint8_t chordVoiceIndex = 0;
+    uint8_t chordVoiceCount = 1;
+    int16_t chordInterval = 0;
+    bool chordIntervalUsesScaleDegrees = false;
 };
 
 struct StepSequencerExpansion {

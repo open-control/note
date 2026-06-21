@@ -17,6 +17,7 @@ using oc::note::sequencer::STEP_NODE_PROBABILITY_OFFSET;
 using oc::note::sequencer::STEP_NODE_VELOCITY_OFFSET;
 using oc::note::sequencer::StepBitMask128;
 using oc::note::sequencer::StepSequencerChordMode;
+using oc::note::sequencer::StepSequencerChordSource;
 using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerExpander;
 using oc::note::sequencer::StepSequencerGraph;
@@ -341,6 +342,34 @@ void test_root_local_chord_expands_to_multiple_voices() {
     TEST_ASSERT_EQUAL_UINT8(60, out.notes[0].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(64, out.notes[1].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(67, out.notes[2].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Local),
+        static_cast<uint8_t>(out.notes[0].chordSource)
+    );
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].chordVoiceIndex);
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[1].chordVoiceIndex);
+    TEST_ASSERT_EQUAL_UINT8(2, out.notes[2].chordVoiceIndex);
+    TEST_ASSERT_EQUAL_UINT8(3, out.notes[0].chordVoiceCount);
+    TEST_ASSERT_EQUAL_INT16(0, out.notes[0].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(4, out.notes[1].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(7, out.notes[2].chordInterval);
+}
+
+void test_root_local_chord_reports_scale_degree_intervals_when_constrained() {
+    auto state = baseState();
+    state.scaleSettings.root = 0;
+    state.scaleSettings.type = StepSequencerScaleType::Major;
+    state.scaleSettings.mode = StepSequencerScaleConstraintMode::ConstrainNearest;
+    auto graph = graphWithRoot();
+    setLocalChord(graph, 0);
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_TRUE(out.notes[0].chordIntervalUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_INT16(0, out.notes[0].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(2, out.notes[1].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(4, out.notes[2].chordInterval);
 }
 
 void test_micro_sequence_child_inherits_parent_chord_from_child_root() {
@@ -357,6 +386,12 @@ void test_micro_sequence_child_inherits_parent_chord_from_child_root() {
     TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(66, out.notes[1].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(69, out.notes[2].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Inherited),
+        static_cast<uint8_t>(out.notes[0].chordSource)
+    );
+    TEST_ASSERT_EQUAL_UINT8(3, out.notes[0].chordVoiceCount);
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[1].chordVoiceIndex);
 }
 
 void test_micro_sequence_child_single_blocks_parent_chord() {
@@ -372,6 +407,12 @@ void test_micro_sequence_child_single_blocks_parent_chord() {
 
     TEST_ASSERT_EQUAL_UINT8(1, out.count);
     TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Single),
+        static_cast<uint8_t>(out.notes[0].chordSource)
+    );
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[0].chordVoiceCount);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].chordVoiceIndex);
 }
 
 void test_micro_sequence_child_local_chord_overrides_parent_chord() {
@@ -391,6 +432,12 @@ void test_micro_sequence_child_local_chord_overrides_parent_chord() {
     TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(65, out.notes[1].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(69, out.notes[2].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Local),
+        static_cast<uint8_t>(out.notes[0].chordSource)
+    );
+    TEST_ASSERT_EQUAL_INT16(3, out.notes[1].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(7, out.notes[2].chordInterval);
 }
 
 void test_root_local_chord_strum_offsets_voice_ticks() {
@@ -406,6 +453,9 @@ void test_root_local_chord_strum_offsets_voice_ticks() {
     TEST_ASSERT_EQUAL_UINT32(0, out.notes[0].localTick);
     TEST_ASSERT_EQUAL_UINT32(2, out.notes[1].localTick);
     TEST_ASSERT_EQUAL_UINT32(5, out.notes[2].localTick);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].chordVoiceIndex);
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[1].chordVoiceIndex);
+    TEST_ASSERT_EQUAL_UINT8(2, out.notes[2].chordVoiceIndex);
 }
 
 void test_cycle_state_overrides_parent_values() {
@@ -940,6 +990,7 @@ int main() {
     RUN_TEST(test_note_offset_is_scale_degree_in_constrained_scale);
     RUN_TEST(test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_degree);
     RUN_TEST(test_root_local_chord_expands_to_multiple_voices);
+    RUN_TEST(test_root_local_chord_reports_scale_degree_intervals_when_constrained);
     RUN_TEST(test_micro_sequence_child_inherits_parent_chord_from_child_root);
     RUN_TEST(test_micro_sequence_child_single_blocks_parent_chord);
     RUN_TEST(test_micro_sequence_child_local_chord_overrides_parent_chord);

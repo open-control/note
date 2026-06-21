@@ -498,7 +498,12 @@ void StepSequencerEngine::publishExpandedVariationTelemetry_(uint8_t stepIndex,
             expansion.notes[i].nodeId,
             expansion.notes[i].localTick,
             expansion.notes[i].spanTicks,
-            expansion.notes[i].variation
+            expansion.notes[i].variation,
+            expansion.notes[i].chordSource,
+            expansion.notes[i].chordVoiceIndex,
+            expansion.notes[i].chordVoiceCount,
+            expansion.notes[i].chordInterval,
+            expansion.notes[i].chordIntervalUsesScaleDegrees
         );
     }
 }

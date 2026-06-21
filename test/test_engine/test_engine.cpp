@@ -23,6 +23,7 @@ using oc::note::sequencer::STEP_NODE_CHORD_MODE;
 using oc::note::sequencer::STEP_NODE_CYCLE_SET;
 using oc::note::sequencer::STEP_NODE_NOTE_OFFSET;
 using oc::note::sequencer::StepSequencerChordMode;
+using oc::note::sequencer::StepSequencerChordSource;
 using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerGraph;
 using oc::note::sequencer::StepSequencerSequenceKind;
@@ -1092,6 +1093,56 @@ void test_graph_expanded_variation_telemetry_tracks_nested_micro_node() {
         static_cast<uint8_t>(expectedParent.resolved.note + 2U),
         st.expandedVariationTelemetry.variation[1].resolved.note
     );
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Single),
+        static_cast<uint8_t>(st.expandedVariationTelemetry.chordSource[0])
+    );
+    TEST_ASSERT_EQUAL_UINT8(1, st.expandedVariationTelemetry.chordVoiceCount[0]);
+    TEST_ASSERT_EQUAL_UINT8(0, st.expandedVariationTelemetry.chordVoiceIndex[0]);
+    TEST_ASSERT_EQUAL_INT16(0, st.expandedVariationTelemetry.chordInterval[0]);
+}
+
+void test_graph_expanded_variation_telemetry_tracks_chord_voices() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 1;
+    graph.stepNodeCount = 4;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    setLocalChord(graph, 0);
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+
+    TEST_ASSERT_TRUE(st.expandedVariationTelemetry.valid);
+    TEST_ASSERT_EQUAL_UINT8(3, st.expandedVariationTelemetry.count);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordSource::Local),
+        static_cast<uint8_t>(st.expandedVariationTelemetry.chordSource[0])
+    );
+    TEST_ASSERT_EQUAL_UINT8(3, st.expandedVariationTelemetry.chordVoiceCount[0]);
+    TEST_ASSERT_EQUAL_UINT8(0, st.expandedVariationTelemetry.chordVoiceIndex[0]);
+    TEST_ASSERT_EQUAL_UINT8(1, st.expandedVariationTelemetry.chordVoiceIndex[1]);
+    TEST_ASSERT_EQUAL_UINT8(2, st.expandedVariationTelemetry.chordVoiceIndex[2]);
+    TEST_ASSERT_EQUAL_INT16(0, st.expandedVariationTelemetry.chordInterval[0]);
+    TEST_ASSERT_EQUAL_INT16(4, st.expandedVariationTelemetry.chordInterval[1]);
+    TEST_ASSERT_EQUAL_INT16(7, st.expandedVariationTelemetry.chordInterval[2]);
+    TEST_ASSERT_FALSE(st.expandedVariationTelemetry.chordIntervalUsesScaleDegrees[0]);
 }
 
 int main() {
@@ -1124,5 +1175,6 @@ int main() {
     RUN_TEST(test_graph_root_chord_schedules_all_voices);
     RUN_TEST(test_graph_root_chord_strum_schedules_staggered_voices);
     RUN_TEST(test_graph_expanded_variation_telemetry_tracks_nested_micro_node);
+    RUN_TEST(test_graph_expanded_variation_telemetry_tracks_chord_voices);
     return UNITY_END();
 }
