@@ -5,6 +5,8 @@
 #include <oc/note/sequencer/StepSequencerExpander.hpp>
 
 using oc::note::sequencer::STEP_NODE_CHILD_SEQUENCE;
+using oc::note::sequencer::STEP_NODE_CHORD_LOCAL;
+using oc::note::sequencer::STEP_NODE_CHORD_MODE;
 using oc::note::sequencer::STEP_NODE_CYCLE_SET;
 using oc::note::sequencer::STEP_NODE_ENABLED_OVERRIDE;
 using oc::note::sequencer::STEP_NODE_ENABLED_VALUE;
@@ -14,6 +16,8 @@ using oc::note::sequencer::STEP_NODE_NUDGE_OFFSET;
 using oc::note::sequencer::STEP_NODE_PROBABILITY_OFFSET;
 using oc::note::sequencer::STEP_NODE_VELOCITY_OFFSET;
 using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::StepSequencerChordMode;
+using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerExpander;
 using oc::note::sequencer::StepSequencerGraph;
 using oc::note::sequencer::StepSequencerGraphLimits;
@@ -103,6 +107,12 @@ void attachCycleSet(StepSequencerGraph& graph,
     if (graph.stepNodeCount < end) {
         graph.stepNodeCount = end;
     }
+}
+
+void setLocalChord(StepSequencerGraph& graph, uint16_t nodeId, StepSequencerChordSpec spec = {}) {
+    graph.stepNodes[nodeId].flags |= STEP_NODE_CHORD_MODE | STEP_NODE_CHORD_LOCAL;
+    graph.stepNodes[nodeId].chordMode = StepSequencerChordMode::Local;
+    graph.stepNodes[nodeId].chordSpec = spec;
 }
 
 }  // namespace
@@ -317,6 +327,85 @@ void test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_de
     TEST_ASSERT_EQUAL_UINT8(1, out.count);
     TEST_ASSERT_EQUAL_UINT8(65, out.notes[0].variation.resolved.note);
     TEST_ASSERT_TRUE(out.notes[0].variation.pitchVariationUsesScaleDegrees);
+}
+
+void test_root_local_chord_expands_to_multiple_voices() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    setLocalChord(graph, 0);
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_FALSE(out.noteBudgetExceeded);
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT8(60, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(64, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(67, out.notes[2].variation.resolved.note);
+}
+
+void test_micro_sequence_child_inherits_parent_chord_from_child_root() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    setLocalChord(graph, 0);
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 2;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(66, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(69, out.notes[2].variation.resolved.note);
+}
+
+void test_micro_sequence_child_single_blocks_parent_chord() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    setLocalChord(graph, 0);
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET | STEP_NODE_CHORD_MODE;
+    graph.stepNodes[4].noteOffset = 2;
+    graph.stepNodes[4].chordMode = StepSequencerChordMode::Single;
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
+}
+
+void test_micro_sequence_child_local_chord_overrides_parent_chord() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    setLocalChord(graph, 0);
+    attachSequence(graph, 0, 1, 4, 1);
+    graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[4].noteOffset = 2;
+    StepSequencerChordSpec minor{};
+    minor.color = 1;
+    setLocalChord(graph, 4, minor);
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(65, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(69, out.notes[2].variation.resolved.note);
+}
+
+void test_root_local_chord_strum_offsets_voice_ticks() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    StepSequencerChordSpec spec{};
+    spec.strum = 100;
+    setLocalChord(graph, 0, spec);
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT32(0, out.notes[0].localTick);
+    TEST_ASSERT_EQUAL_UINT32(2, out.notes[1].localTick);
+    TEST_ASSERT_EQUAL_UINT32(5, out.notes[2].localTick);
 }
 
 void test_cycle_state_overrides_parent_values() {
@@ -850,6 +939,11 @@ int main() {
     RUN_TEST(test_note_offset_is_semitone_in_free_scale);
     RUN_TEST(test_note_offset_is_scale_degree_in_constrained_scale);
     RUN_TEST(test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_degree);
+    RUN_TEST(test_root_local_chord_expands_to_multiple_voices);
+    RUN_TEST(test_micro_sequence_child_inherits_parent_chord_from_child_root);
+    RUN_TEST(test_micro_sequence_child_single_blocks_parent_chord);
+    RUN_TEST(test_micro_sequence_child_local_chord_overrides_parent_chord);
+    RUN_TEST(test_root_local_chord_strum_offsets_voice_ticks);
     RUN_TEST(test_cycle_state_overrides_parent_values);
     RUN_TEST(test_inactive_cycle_state_mutes_step_for_cycle);
     RUN_TEST(test_cycle_state_probability_offset_can_mute_step);

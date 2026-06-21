@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "StepSequencerChord.hpp"
 #include "StepSequencerVariation.hpp"
 
 namespace oc::note::sequencer {
@@ -45,6 +46,8 @@ enum StepSequencerStepNodeFlags : uint16_t {
     STEP_NODE_PROBABILITY_OFFSET = 1U << 6,
     STEP_NODE_CHILD_SEQUENCE = 1U << 7,
     STEP_NODE_CYCLE_SET = 1U << 8,
+    STEP_NODE_CHORD_MODE = 1U << 9,
+    STEP_NODE_CHORD_LOCAL = 1U << 10,
 };
 
 struct StepSequencerStepNode {
@@ -55,6 +58,8 @@ struct StepSequencerStepNode {
     int8_t nudgeOffset = 0;
     int16_t probabilityOffset = 0;
     StepSequencerVariationRanges localVariation{};
+    StepSequencerChordMode chordMode = StepSequencerChordMode::Single;
+    StepSequencerChordSpec chordSpec{};
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 

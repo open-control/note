@@ -18,8 +18,12 @@ using oc::note::sequencer::SequencerEventType;
 using oc::note::sequencer::StepSequencerEngine;
 using oc::note::sequencer::StepBitMask128;
 using oc::note::sequencer::STEP_NODE_CHILD_SEQUENCE;
+using oc::note::sequencer::STEP_NODE_CHORD_LOCAL;
+using oc::note::sequencer::STEP_NODE_CHORD_MODE;
 using oc::note::sequencer::STEP_NODE_CYCLE_SET;
 using oc::note::sequencer::STEP_NODE_NOTE_OFFSET;
+using oc::note::sequencer::StepSequencerChordMode;
+using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerGraph;
 using oc::note::sequencer::StepSequencerSequenceKind;
 using oc::note::sequencer::StepSequencerScaleConstraintMode;
@@ -56,6 +60,24 @@ const SequencerEvent* firstEventOfType(const std::vector<SequencerEvent>& events
         if (e.type == type) return &e;
     }
     return nullptr;
+}
+
+bool hasEvent(const std::vector<SequencerEvent>& events,
+              SequencerEventType type,
+              uint32_t tick,
+              uint8_t note) {
+    for (const auto& event : events) {
+        if (event.type == type && event.tick == tick && event.note == note) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void setLocalChord(StepSequencerGraph& graph, uint16_t nodeId, StepSequencerChordSpec spec = {}) {
+    graph.stepNodes[nodeId].flags |= STEP_NODE_CHORD_MODE | STEP_NODE_CHORD_LOCAL;
+    graph.stepNodes[nodeId].chordMode = StepSequencerChordMode::Local;
+    graph.stepNodes[nodeId].chordSpec = spec;
 }
 
 uint32_t mixVariationIdentityForTest(uint32_t parent,
@@ -928,6 +950,77 @@ void test_graph_cycle_state_is_applied_by_engine_scheduler() {
     TEST_ASSERT_EQUAL_UINT8(67, sink.events[2].note);
 }
 
+void test_graph_root_chord_schedules_all_voices() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 1;
+    graph.stepNodeCount = 4;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    setLocalChord(graph, 0);
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+    eng.update(1, true);
+
+    TEST_ASSERT_EQUAL(3, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 60));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 64));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 67));
+}
+
+void test_graph_root_chord_strum_schedules_staggered_voices() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 1;
+    graph.stepNodeCount = 4;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    StepSequencerChordSpec spec{};
+    spec.strum = 100;
+    setLocalChord(graph, 0, spec);
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+
+    eng.update(0, true);
+    eng.update(2, true);
+    eng.update(5, true);
+
+    TEST_ASSERT_EQUAL(3, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 60));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 2, 64));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 5, 67));
+}
+
 void test_graph_expanded_variation_telemetry_tracks_nested_micro_node() {
     StepSequencerRuntimeState st;
     st.length = 4;
@@ -1028,6 +1121,8 @@ int main() {
     RUN_TEST(test_free_scale_reports_out_of_scale_without_changing_scheduled_note);
     RUN_TEST(test_graph_micro_sequence_schedules_multiple_notes_inside_step);
     RUN_TEST(test_graph_cycle_state_is_applied_by_engine_scheduler);
+    RUN_TEST(test_graph_root_chord_schedules_all_voices);
+    RUN_TEST(test_graph_root_chord_strum_schedules_staggered_voices);
     RUN_TEST(test_graph_expanded_variation_telemetry_tracks_nested_micro_node);
     return UNITY_END();
 }

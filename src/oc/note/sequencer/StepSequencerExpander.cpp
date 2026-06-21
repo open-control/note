@@ -12,6 +12,8 @@ struct ResolvedStep {
     StepSequencerStepValues values{};
     uint8_t probability = StepSequencerRuntimeState::DEFAULT_PROBABILITY;
     StepSequencerVariationRanges localVariation{};
+    StepSequencerChordState chordState{};
+    StepSequencerInheritedChord inheritedChord{};
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 };
@@ -195,6 +197,13 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     }
     out.localVariation = node.localVariation;
     out.localVariation.clamp();
+    if (node.has(STEP_NODE_CHORD_MODE)) {
+        out.chordState.mode = node.chordMode;
+    }
+    if (node.has(STEP_NODE_CHORD_LOCAL)) {
+        out.chordState.local = node.chordSpec;
+    }
+    out.chordState.local.clamp();
     if (node.has(STEP_NODE_CHILD_SEQUENCE)) {
         out.childSequenceId = node.childSequenceId;
     }
@@ -203,6 +212,18 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     }
 
     return out;
+}
+
+StepSequencerInheritedChord activeChordForChildren(const ResolvedStep& step,
+                                                   StepSequencerScaleSettings scaleSettings,
+                                                   uint16_t spanTicks) {
+    return resolveStepChord(
+        step.values,
+        scaleSettings,
+        step.chordState,
+        step.inheritedChord,
+        spanTicks
+    ).activeForChildren;
 }
 
 bool ownsChildContent(const StepSequencerStepNode& node) {
@@ -312,6 +333,24 @@ CycleResolution applyCycleStates(const StepSequencerGraph& graph,
     return result;
 }
 
+bool appendExpandedVoice(StepSequencerExpansion& out,
+                         const ResolvedStep& step,
+                         const StepSequencerResolvedVariation& variation,
+                         uint32_t localTick,
+                         uint16_t spanTicks) {
+    if (out.count >= out.notes.size()) {
+        out.noteBudgetExceeded = true;
+        return false;
+    }
+
+    auto& note = out.notes[out.count++];
+    note.nodeId = step.nodeId;
+    note.localTick = localTick;
+    note.spanTicks = std::max<uint16_t>(spanTicks, 1U);
+    note.variation = variation;
+    return true;
+}
+
 bool appendNote(StepSequencerExpansion& out,
                 const ResolvedStep& step,
                 uint32_t localTick,
@@ -323,16 +362,7 @@ bool appendNote(StepSequencerExpansion& out,
                 uint8_t rootStepIndex,
                 uint32_t variationIdentity,
                 bool triggered) {
-    if (out.count >= out.notes.size()) {
-        out.noteBudgetExceeded = true;
-        return false;
-    }
-
-    auto& note = out.notes[out.count++];
-    note.nodeId = step.nodeId;
-    note.localTick = localTick;
-    note.spanTicks = std::max<uint16_t>(spanTicks, 1U);
-    note.variation = resolveStepVariation(
+    const StepSequencerResolvedVariation variation = resolveStepVariation(
         step.values,
         ranges,
         scaleSettings,
@@ -343,6 +373,32 @@ bool appendNote(StepSequencerExpansion& out,
         triggered,
         variationIdentity
     );
+
+    const StepSequencerChordResolution chord = resolveStepChord(
+        variation.resolved,
+        scaleSettings,
+        step.chordState,
+        step.inheritedChord,
+        std::max<uint16_t>(spanTicks, 1U)
+    );
+
+    for (uint8_t i = 0; i < chord.count; ++i) {
+        StepSequencerResolvedVariation voiceVariation = variation;
+        voiceVariation.resolved.note = chord.voices[i].note;
+        voiceVariation.resolved.velocity = chord.voices[i].velocity;
+        voiceVariation.resolved.gate = chord.voices[i].gate;
+        voiceVariation.resolved.nudge = chord.voices[i].nudge;
+
+        if (!appendExpandedVoice(
+                out,
+                step,
+                voiceVariation,
+                localTick + chord.voices[i].delayTicks,
+                spanTicks
+            )) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -427,6 +483,8 @@ void expandStep(const StepSequencerGraph& graph,
         );
 
         const uint16_t childTotalSpan = effectiveGateSpan(spanTicks, step.values.gate);
+        const StepSequencerInheritedChord inheritedChord =
+            activeChordForChildren(step, scaleSettings, childTotalSpan);
         for (uint8_t i = 0; i < child->length; ++i) {
             const uint8_t sourceIndex = normalizeSequenceIndex(i, child->offset, child->length);
             const auto* childNode = graph.stepNode(
@@ -438,6 +496,8 @@ void expandStep(const StepSequencerGraph& graph,
             childBase.childSequenceId = StepSequencerGraphLimits::INVALID_ID;
             childBase.cycleSetId = StepSequencerGraphLimits::INVALID_ID;
             childBase.values.gate = StepSequencerRuntimeState::DEFAULT_GATE_PERCENT;
+            childBase.chordState = defaultChildChordState();
+            childBase.inheritedChord = inheritedChord;
             const auto childNodeId = static_cast<uint16_t>(child->firstStepNode + sourceIndex);
             const ResolvedStep childStep = applyNode(
                 childBase,
@@ -530,6 +590,8 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         },
         .probability = StepSequencerRuntimeState::clampProbability(state.probability[sourceRootIndex]),
         .localVariation = {},
+        .chordState = defaultRootChordState(),
+        .inheritedChord = {},
         .childSequenceId = StepSequencerGraphLimits::INVALID_ID,
         .cycleSetId = StepSequencerGraphLimits::INVALID_ID,
     };
