@@ -20,6 +20,30 @@ enum class StepSequencerChordSource : uint8_t {
     Local,
 };
 
+enum class StepSequencerChordQuality : uint8_t {
+    Unknown = 0,
+    Power,
+    Major,
+    Minor,
+    Diminished,
+    Augmented,
+    Sus2,
+    Sus4,
+    Dominant7,
+    Major7,
+    Minor7,
+    MinorMajor7,
+    Major6,
+    Minor6,
+    Diminished7,
+    HalfDiminished7,
+    Dominant9,
+    Major9,
+    Minor9,
+    Add9,
+    MinorAdd9,
+};
+
 struct StepSequencerChordSpec {
     static constexpr uint8_t MAX_VOICES = 8;
     static constexpr uint8_t MAX_COLOR = 7;
@@ -70,6 +94,20 @@ struct StepSequencerChordResolution {
     StepSequencerInheritedChord activeForChildren{};
 };
 
+struct StepSequencerChordAnalysis {
+    static constexpr uint8_t MAX_VOICES = StepSequencerChordSpec::MAX_VOICES;
+
+    bool recognized = false;
+    bool slash = false;
+    uint8_t rootPitchClass = 0;
+    uint8_t bassPitchClass = 0;
+    StepSequencerChordQuality quality = StepSequencerChordQuality::Unknown;
+    uint8_t pitchClassCount = 0;
+    std::array<uint8_t, MAX_VOICES> pitchClasses{};
+    uint8_t intervalCount = 0;
+    std::array<uint8_t, MAX_VOICES> chromaticIntervals{};
+};
+
 StepSequencerChordState defaultRootChordState();
 StepSequencerChordState defaultChildChordState();
 
@@ -79,6 +117,11 @@ StepSequencerChordResolution resolveStepChord(
     StepSequencerChordState chord,
     StepSequencerInheritedChord inherited = {},
     uint16_t spanTicks = 1
+);
+
+StepSequencerChordAnalysis analyzeResolvedChord(
+    const StepSequencerChordResolution& resolution,
+    StepSequencerStepValues root
 );
 
 }  // namespace oc::note::sequencer
