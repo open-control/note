@@ -312,13 +312,15 @@ StepSequencerChordResolution resolveStepChord(StepSequencerStepValues root,
                                               StepSequencerScaleSettings scaleSettings,
                                               StepSequencerChordState chord,
                                               StepSequencerInheritedChord inherited,
-                                              uint16_t spanTicks) {
+                                              uint16_t spanTicks,
+                                              bool pitchUsesScaleDegrees) {
     scaleSettings.clamp();
     chord.local.clamp();
     inherited.spec.clamp();
 
     StepSequencerChordResolution result{};
-    result.intervalUsesScaleDegrees = scaleSettings.isConstrained();
+    result.intervalUsesScaleDegrees =
+        pitchUsesScaleDegrees && scaleSettings.isConstrained();
 
     StepSequencerChordSource source = StepSequencerChordSource::Single;
     const StepSequencerChordSpec* spec = effectiveSpec(chord, inherited, source);

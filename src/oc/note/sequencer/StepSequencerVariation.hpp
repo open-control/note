@@ -171,7 +171,8 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     uint32_t cycleIndex,
     uint8_t stepIndex,
     bool triggered = true,
-    uint32_t stepIdentity = UINT32_MAX
+    uint32_t stepIdentity = UINT32_MAX,
+    bool pitchUsesScaleDegrees = true
 ) {
     ranges.clamp();
     scaleSettings.clamp();
@@ -194,7 +195,8 @@ inline StepSequencerResolvedVariation resolveStepVariation(
         stepIdentity = stepIndex;
     }
 
-    result.pitchVariationUsesScaleDegrees = scaleSettings.isConstrained();
+    result.pitchVariationUsesScaleDegrees =
+        pitchUsesScaleDegrees && scaleSettings.isConstrained();
     result.pitchDelta = static_cast<int8_t>(
         centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.pitchSemitones, 0x50495443u)
     );
@@ -218,7 +220,12 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     } else {
         const uint8_t variedNote = clampMidi7(static_cast<int>(base.note) + result.pitchDelta);
         result.scale = resolveScaleNote(variedNote, scaleSettings);
-        result.resolved.note = result.scale.outputNote;
+        result.scale.outputNote = variedNote;
+        result.scale.constrained = false;
+        result.scale.semitoneDelta = static_cast<int8_t>(
+            static_cast<int>(variedNote) - static_cast<int>(base.note)
+        );
+        result.resolved.note = variedNote;
     }
 
     result.resolved.velocity = clampMidi7(static_cast<int>(base.velocity) + result.velocityDelta);
