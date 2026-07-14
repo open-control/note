@@ -116,7 +116,8 @@ StepSequencerChordResolution resolveStepChord(
     StepSequencerScaleSettings scaleSettings,
     StepSequencerChordState chord,
     StepSequencerInheritedChord inherited = {},
-    uint16_t spanTicks = 1
+    uint16_t spanTicks = 1,
+    bool pitchUsesScaleDegrees = true
 );
 
 StepSequencerChordAnalysis analyzeResolvedChord(

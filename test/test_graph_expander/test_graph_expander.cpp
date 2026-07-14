@@ -12,6 +12,7 @@ using oc::note::sequencer::STEP_NODE_ENABLED_OVERRIDE;
 using oc::note::sequencer::STEP_NODE_ENABLED_VALUE;
 using oc::note::sequencer::STEP_NODE_GATE_OFFSET;
 using oc::note::sequencer::STEP_NODE_NOTE_OFFSET;
+using oc::note::sequencer::STEP_NODE_PITCH_CHROMATIC;
 using oc::note::sequencer::STEP_NODE_NUDGE_OFFSET;
 using oc::note::sequencer::STEP_NODE_PROBABILITY_OFFSET;
 using oc::note::sequencer::STEP_NODE_VELOCITY_OFFSET;
@@ -976,6 +977,121 @@ void test_micro_sequence_steps_use_distinct_variation_identity() {
     TEST_ASSERT_EQUAL_INT8(secondExpected.pitchDelta, out.notes[1].variation.pitchDelta);
 }
 
+void test_per_node_pitch_policy_keeps_chromatic_offset_and_adapts_relative_offset() {
+    auto state = baseState();
+    state.scaleSettings = {
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+
+    auto relativeGraph = graphWithRoot();
+    relativeGraph.stepNodes[0].flags |= STEP_NODE_NOTE_OFFSET;
+    relativeGraph.stepNodes[0].noteOffset = 1;
+    const auto relative = StepSequencerExpander::expandRootStep(
+        state, relativeGraph, 0, 0, 8, 1, true
+    );
+    TEST_ASSERT_EQUAL_UINT8(1, relative.count);
+    TEST_ASSERT_EQUAL_UINT8(62, relative.notes[0].variation.resolved.note);  // C -> D
+
+    auto chromaticGraph = relativeGraph;
+    chromaticGraph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
+    const auto chromatic = StepSequencerExpander::expandRootStep(
+        state, chromaticGraph, 0, 0, 8, 1, true
+    );
+    TEST_ASSERT_EQUAL_UINT8(1, chromatic.count);
+    TEST_ASSERT_EQUAL_UINT8(61, chromatic.notes[0].variation.resolved.note);  // C -> C#
+}
+
+void test_per_node_pitch_policy_controls_local_variation_and_chord_intervals() {
+    auto state = baseState();
+    state.scaleSettings = {
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+
+    uint32_t seed = 0;
+    while (seed < 1000 && resolveStepVariation(
+               StepSequencerStepValues{60, 96, 100, 0},
+               StepSequencerVariationRanges{1, 0, 0, 0},
+               state.scaleSettings,
+               StepSequencerRuntimeState::MAX_GATE_PERCENT,
+               seed,
+               0,
+               0,
+               true,
+               0
+           ).pitchDelta != 1) {
+        ++seed;
+    }
+    TEST_ASSERT_TRUE(seed < 1000);
+
+    auto relativeGraph = graphWithRoot();
+    relativeGraph.stepNodes[0].localVariation.pitchSemitones = 1;
+    setLocalChord(relativeGraph, 0, StepSequencerChordSpec{.voiceCount = 3});
+    const auto relative = StepSequencerExpander::expandRootStep(
+        state, relativeGraph, 0, 0, 8, seed, true
+    );
+    TEST_ASSERT_TRUE(relative.count >= 1);
+    TEST_ASSERT_EQUAL_UINT8(62, relative.notes[0].variation.resolved.note);
+    TEST_ASSERT_TRUE(relative.notes[0].variation.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_TRUE(relative.notes[0].chordIntervalUsesScaleDegrees);
+
+    auto chromaticGraph = relativeGraph;
+    chromaticGraph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
+    const auto chromatic = StepSequencerExpander::expandRootStep(
+        state, chromaticGraph, 0, 0, 8, seed, true
+    );
+    TEST_ASSERT_TRUE(chromatic.count >= 1);
+    TEST_ASSERT_EQUAL_UINT8(61, chromatic.notes[0].variation.resolved.note);
+    TEST_ASSERT_FALSE(chromatic.notes[0].variation.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_FALSE(chromatic.notes[0].chordIntervalUsesScaleDegrees);
+}
+
+void test_global_scale_relative_and_local_chromatic_variation_coexist() {
+    auto state = baseState();
+    state.note[0] = 60;
+    state.scaleSettings = {
+        .root = 0,
+        .type = StepSequencerScaleType::Major,
+        .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
+    };
+    state.variationRanges.pitchSemitones = 1;
+
+    uint32_t seed = 0;
+    while (seed < 1000 && resolveStepVariation(
+               StepSequencerStepValues{60, 96, 100, 0},
+               StepSequencerVariationRanges{1, 0, 0, 0},
+               state.scaleSettings,
+               StepSequencerRuntimeState::MAX_GATE_PERCENT,
+               seed,
+               0,
+               0,
+               true,
+               0,
+               true
+           ).pitchDelta != 1) {
+        ++seed;
+    }
+    TEST_ASSERT_TRUE(seed < 1000);
+
+    auto graph = graphWithRoot();
+    graph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
+    graph.stepNodes[0].localVariation.pitchSemitones = 1;
+
+    const auto out = StepSequencerExpander::expandRootStep(
+        state, graph, 0, 0, 8, seed, true
+    );
+
+    TEST_ASSERT_EQUAL_UINT8(1, out.count);
+    // Global destination variation moves C one C-major degree to D; the
+    // imported local chromatic layer then moves D one semitone to D#.
+    TEST_ASSERT_EQUAL_UINT8(63, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_FALSE(out.notes[0].variation.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_UINT8(2, out.notes[0].variation.ranges.pitchSemitones);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_micro_sequence_expands_inside_parent_step);
@@ -1014,5 +1130,8 @@ int main() {
     RUN_TEST(test_parent_local_variation_inherits_into_cycle_state_base);
     RUN_TEST(test_cycle_state_local_variation_sets_micro_sequence_pitch_origin);
     RUN_TEST(test_micro_sequence_steps_use_distinct_variation_identity);
+    RUN_TEST(test_per_node_pitch_policy_keeps_chromatic_offset_and_adapts_relative_offset);
+    RUN_TEST(test_per_node_pitch_policy_controls_local_variation_and_chord_intervals);
+    RUN_TEST(test_global_scale_relative_and_local_chromatic_variation_coexist);
     return UNITY_END();
 }

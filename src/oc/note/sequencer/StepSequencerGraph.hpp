@@ -48,6 +48,9 @@ enum StepSequencerStepNodeFlags : uint16_t {
     STEP_NODE_CYCLE_SET = 1U << 8,
     STEP_NODE_CHORD_MODE = 1U << 9,
     STEP_NODE_CHORD_LOCAL = 1U << 10,
+    // Absence preserves the legacy destination-scale behavior. This explicit
+    // per-node opt-out lets one graph mix chromatic and scale-relative content.
+    STEP_NODE_PITCH_CHROMATIC = 1U << 11,
 };
 
 struct StepSequencerStepNode {
