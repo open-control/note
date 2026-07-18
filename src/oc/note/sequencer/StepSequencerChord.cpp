@@ -13,6 +13,11 @@ constexpr uint8_t PALETTE_COUNT = StepSequencerChordSpec::MAX_COLOR + 1;
 constexpr uint8_t VARIANT_COUNT = StepSequencerChordSpec::MAX_VARIANT + 1;
 constexpr uint8_t VOICE_COUNT = StepSequencerChordSpec::MAX_VOICES;
 constexpr uint8_t ANALYSIS_ROOT_CANDIDATE_COUNT = StepSequencerChordAnalysis::MAX_VOICES + 2;
+constexpr uint8_t SCALE_HARMONY_COUNT = 6;
+constexpr uint8_t CHROMATIC_HARMONY_FIRST =
+    static_cast<uint8_t>(StepSequencerChordHarmony::Major);
+constexpr uint8_t CHROMATIC_HARMONY_COUNT =
+    static_cast<uint8_t>(StepSequencerChordHarmony::Count) - CHROMATIC_HARMONY_FIRST;
 
 // Color selects the harmonic family. Variant then selects a voicing path through
 // that family, so both axes remain deterministic and musically distinct.
@@ -60,6 +65,39 @@ const uint8_t SPREAD_OCTAVE_SHIFTS[StepSequencerChordSpec::MAX_SPREAD + 1][VOICE
     {0, 2, 2, 3, 3, 4, 4, 5},
     {0, 1, 3, 3, 4, 5, 5, 6},
     {0, 2, 3, 4, 4, 5, 6, 7},
+};
+
+// Semantic Harmony owns pitch membership only. Rows 0..5 are scale-degree
+// recipes; rows 6..14 are explicit chromatic qualities. All rows are ordered
+// and extended to the bounded eight-voice ceiling without runtime allocation.
+const int16_t SEMANTIC_HARMONY_INTERVALS[
+    static_cast<uint8_t>(StepSequencerChordHarmony::Count)
+][VOICE_COUNT] PROGMEM = {
+    {0, 2, 4, 6, 8, 10, 12, 14},       // Diatonic triad/extensions
+    {0, 2, 4, 6, 8, 10, 12, 14},       // Diatonic seventh/extensions
+    {0, 3, 4, 7, 8, 11, 12, 15},       // Suspended
+    {0, 3, 6, 9, 12, 15, 18, 21},      // Quartal
+    {0, 4, 8, 12, 16, 20, 24, 28},     // Fifths
+    {0, 1, 2, 3, 4, 5, 6, 7},          // Cluster
+    {0, 4, 7, 11, 14, 16, 19, 23},     // Major
+    {0, 3, 7, 10, 14, 15, 19, 22},     // Minor
+    {0, 3, 6, 9, 12, 15, 18, 21},      // Diminished
+    {0, 4, 8, 12, 16, 20, 24, 28},     // Augmented
+    {0, 2, 7, 10, 14, 17, 19, 22},     // Sus2
+    {0, 5, 7, 10, 14, 17, 19, 22},     // Sus4
+    {0, 4, 7, 10, 14, 17, 21, 22},     // Dominant 7
+    {0, 4, 7, 11, 14, 17, 21, 23},     // Major 7
+    {0, 3, 7, 10, 14, 17, 19, 22},     // Minor 7
+};
+
+// Voicing is a register transform applied after true inversion. The table is
+// intentionally small, named, immutable and shared by runtime and preview.
+const uint8_t SEMANTIC_VOICING_OCTAVE_SHIFTS[
+    static_cast<uint8_t>(StepSequencerChordVoicing::Count)
+][VOICE_COUNT] PROGMEM = {
+    {0, 0, 0, 0, 0, 0, 0, 0},  // Close
+    {0, 0, 1, 0, 1, 0, 1, 0},  // Open
+    {0, 1, 1, 2, 2, 3, 3, 4},  // Wide
 };
 
 struct ChordQualityPattern {
@@ -208,6 +246,49 @@ int16_t chordFamilyInterval(uint8_t palette,
     return interval;
 }
 
+StepSequencerChordHarmony resolvedSemanticHarmony(
+    StepSequencerChordHarmony requested,
+    bool scaleConstrained,
+    bool& adjusted
+) {
+    if (chordHarmonyAvailable(requested, scaleConstrained)) return requested;
+    adjusted = true;
+    return defaultChordHarmony(scaleConstrained);
+}
+
+void buildSemanticIntervals(
+    std::array<int16_t, VOICE_COUNT>& intervals,
+    uint8_t voiceCount,
+    StepSequencerChordHarmony harmony,
+    StepSequencerChordVoicing voicing,
+    uint8_t inversion,
+    uint8_t octaveSize
+) {
+    const auto harmonyIndex = static_cast<uint8_t>(harmony);
+    for (uint8_t i = 0; i < voiceCount; ++i) {
+        intervals[i] = SEMANTIC_HARMONY_INTERVALS[harmonyIndex][i];
+    }
+
+    for (uint8_t i = 0; i < inversion; ++i) {
+        intervals[i] = static_cast<int16_t>(intervals[i] + octaveSize);
+    }
+    std::sort(intervals.begin(), intervals.begin() + voiceCount);
+
+    const auto voicingIndex = static_cast<uint8_t>(voicing);
+    for (uint8_t i = 0; i < voiceCount; ++i) {
+        const uint8_t octaveShift = SEMANTIC_VOICING_OCTAVE_SHIFTS[voicingIndex][i];
+        intervals[i] = static_cast<int16_t>(
+            intervals[i] + static_cast<int16_t>(octaveSize * octaveShift)
+        );
+    }
+    std::sort(intervals.begin(), intervals.begin() + voiceCount);
+}
+
+bool intervalTouchesMidiBoundary(uint8_t note, int16_t interval) {
+    if (interval > 0 && note == 127U) return true;
+    return interval < 0 && note == 0U;
+}
+
 uint16_t voiceDelayTicks(uint8_t voiceIndex,
                          uint8_t voiceCount,
                          int8_t strum,
@@ -286,14 +367,151 @@ void appendVoice(StepSequencerChordResolution& result,
 
 }  // namespace
 
+StepSequencerChordSpec StepSequencerChordSpec::semantic(
+    StepSequencerChordHarmony harmonyValue,
+    uint8_t voices,
+    StepSequencerChordVoicing voicingValue,
+    uint8_t inversionValue
+) {
+    StepSequencerChordSpec spec{};
+    spec.voiceCount = voices;
+    spec.harmonyData = static_cast<uint8_t>(
+        SEMANTIC_RECIPE_MARKER | static_cast<uint8_t>(harmonyValue)
+    );
+    spec.voicingData = static_cast<uint8_t>(voicingValue);
+    spec.inversionData = inversionValue;
+    spec.clamp();
+    return spec;
+}
+
+bool StepSequencerChordSpec::isSemantic() const {
+    return (harmonyData & SEMANTIC_RECIPE_MARKER) != 0;
+}
+
+StepSequencerChordHarmony StepSequencerChordSpec::harmony() const {
+    if (!isSemantic()) return StepSequencerChordHarmony::DiatonicTriad;
+    return static_cast<StepSequencerChordHarmony>(harmonyData & SEMANTIC_HARMONY_MASK);
+}
+
+StepSequencerChordVoicing StepSequencerChordSpec::voicing() const {
+    if (!isSemantic()) return StepSequencerChordVoicing::Close;
+    return static_cast<StepSequencerChordVoicing>(voicingData);
+}
+
+uint8_t StepSequencerChordSpec::inversion() const {
+    return isSemantic() ? inversionData : 0;
+}
+
+StepSequencerLegacyChordRecipe StepSequencerChordSpec::legacyRecipe() const {
+    if (isSemantic()) return {};
+    return StepSequencerLegacyChordRecipe{
+        .color = harmonyData,
+        .variant = voicingData,
+        .spread = inversionData,
+    };
+}
+
+void StepSequencerChordSpec::setHarmony(StepSequencerChordHarmony harmonyValue) {
+    if (!isSemantic()) {
+        voicingData = static_cast<uint8_t>(StepSequencerChordVoicing::Close);
+        inversionData = 0;
+    }
+    harmonyData = static_cast<uint8_t>(
+        SEMANTIC_RECIPE_MARKER | static_cast<uint8_t>(harmonyValue)
+    );
+    clamp();
+}
+
+void StepSequencerChordSpec::setVoicing(StepSequencerChordVoicing voicingValue) {
+    if (!isSemantic()) setHarmony(StepSequencerChordHarmony::DiatonicTriad);
+    voicingData = static_cast<uint8_t>(voicingValue);
+    clamp();
+}
+
+void StepSequencerChordSpec::setInversion(uint8_t inversionValue) {
+    if (!isSemantic()) setHarmony(StepSequencerChordHarmony::DiatonicTriad);
+    inversionData = inversionValue;
+    clamp();
+}
+
+void StepSequencerChordSpec::setLegacyRecipe(StepSequencerLegacyChordRecipe recipe) {
+    harmonyData = recipe.color;
+    voicingData = recipe.variant;
+    inversionData = recipe.spread;
+    clamp();
+}
+
 void StepSequencerChordSpec::clamp() {
     if (voiceCount == 0) voiceCount = 1;
     if (voiceCount > MAX_VOICES) voiceCount = MAX_VOICES;
-    if (color > MAX_COLOR) color = MAX_COLOR;
-    if (variant > MAX_VARIANT) variant = MAX_VARIANT;
-    if (spread > MAX_SPREAD) spread = MAX_SPREAD;
+
+    if (isSemantic()) {
+        uint8_t harmonyValue = static_cast<uint8_t>(harmony());
+        if (harmonyValue >= static_cast<uint8_t>(StepSequencerChordHarmony::Count)) {
+            harmonyValue = static_cast<uint8_t>(StepSequencerChordHarmony::DiatonicTriad);
+        }
+        harmonyData = static_cast<uint8_t>(SEMANTIC_RECIPE_MARKER | harmonyValue);
+        if (voicingData >= static_cast<uint8_t>(StepSequencerChordVoicing::Count)) {
+            voicingData = static_cast<uint8_t>(StepSequencerChordVoicing::Close);
+        }
+        if (inversionData >= MAX_VOICES) inversionData = MAX_VOICES - 1U;
+    } else {
+        if (harmonyData > MAX_COLOR) harmonyData = MAX_COLOR;
+        if (voicingData > MAX_VARIANT) voicingData = MAX_VARIANT;
+        if (inversionData > MAX_SPREAD) inversionData = MAX_SPREAD;
+    }
+
     strum = clampSigned(strum, MIN_STRUM, MAX_STRUM);
     velocityCurve = clampSigned(velocityCurve, MIN_VELOCITY_CURVE, MAX_VELOCITY_CURVE);
+}
+
+bool chordHarmonyAvailable(StepSequencerChordHarmony harmony, bool scaleConstrained) {
+    const uint8_t value = static_cast<uint8_t>(harmony);
+    if (value >= static_cast<uint8_t>(StepSequencerChordHarmony::Count)) return false;
+    return scaleConstrained
+        ? value < SCALE_HARMONY_COUNT
+        : value >= CHROMATIC_HARMONY_FIRST;
+}
+
+uint8_t chordHarmonyChoiceCount(bool scaleConstrained) {
+    return scaleConstrained ? SCALE_HARMONY_COUNT : CHROMATIC_HARMONY_COUNT;
+}
+
+StepSequencerChordHarmony chordHarmonyForChoice(uint8_t index, bool scaleConstrained) {
+    const uint8_t count = chordHarmonyChoiceCount(scaleConstrained);
+    if (index >= count) index = static_cast<uint8_t>(count - 1U);
+    return static_cast<StepSequencerChordHarmony>(
+        scaleConstrained ? index : static_cast<uint8_t>(CHROMATIC_HARMONY_FIRST + index)
+    );
+}
+
+uint8_t chordHarmonyChoiceIndex(
+    StepSequencerChordHarmony harmony,
+    bool scaleConstrained
+) {
+    if (!chordHarmonyAvailable(harmony, scaleConstrained)) return 0;
+    const uint8_t value = static_cast<uint8_t>(harmony);
+    return scaleConstrained
+        ? value
+        : static_cast<uint8_t>(value - CHROMATIC_HARMONY_FIRST);
+}
+
+StepSequencerChordHarmony defaultChordHarmony(bool scaleConstrained) {
+    return scaleConstrained
+        ? StepSequencerChordHarmony::DiatonicTriad
+        : StepSequencerChordHarmony::Major;
+}
+
+uint8_t recommendedChordVoiceCount(StepSequencerChordHarmony harmony) {
+    switch (harmony) {
+        case StepSequencerChordHarmony::DiatonicSeventh:
+        case StepSequencerChordHarmony::Dominant7:
+        case StepSequencerChordHarmony::Major7:
+        case StepSequencerChordHarmony::Minor7:
+            return 4;
+        default:
+            return 3;
+    }
 }
 
 StepSequencerChordState defaultRootChordState() {
@@ -327,6 +545,7 @@ StepSequencerChordResolution resolveStepChord(StepSequencerStepValues root,
     result.source = source;
 
     if (spec == nullptr) {
+        result.requestedVoiceCount = 1;
         appendVoice(
             result,
             StepSequencerResolvedChordVoice{
@@ -345,36 +564,65 @@ StepSequencerChordResolution resolveStepChord(StepSequencerStepValues root,
     result.activeForChildren.valid = true;
     result.activeForChildren.spec = *spec;
 
-    const uint8_t palette = static_cast<uint8_t>(spec->color % PALETTE_COUNT);
-    const uint8_t variant = static_cast<uint8_t>(spec->variant % VARIANT_COUNT);
     const uint8_t voiceCount = spec->voiceCount;
+    result.requestedVoiceCount = voiceCount;
     const uint8_t octaveSize = result.intervalUsesScaleDegrees
         ? scaleDegreeOctaveSpan(scaleSettings)
         : 12U;
-    int16_t previousBaseInterval = 0;
+
+    std::array<int16_t, VOICE_COUNT> intervals{};
+    if (spec->isSemantic()) {
+        result.semanticRecipe = true;
+        result.harmony = resolvedSemanticHarmony(
+            spec->harmony(),
+            result.intervalUsesScaleDegrees,
+            result.harmonyAdjustedForPitchMode
+        );
+        result.voicing = spec->voicing();
+        const uint8_t maximumInversion = static_cast<uint8_t>(voiceCount - 1U);
+        result.effectiveInversion = std::min(spec->inversion(), maximumInversion);
+        result.inversionClamped = result.effectiveInversion != spec->inversion();
+        buildSemanticIntervals(
+            intervals,
+            voiceCount,
+            result.harmony,
+            result.voicing,
+            result.effectiveInversion,
+            octaveSize
+        );
+    } else {
+        const auto recipe = spec->legacyRecipe();
+        const uint8_t palette = static_cast<uint8_t>(recipe.color % PALETTE_COUNT);
+        const uint8_t variant = static_cast<uint8_t>(recipe.variant % VARIANT_COUNT);
+        int16_t previousBaseInterval = 0;
+        for (uint8_t i = 0; i < voiceCount; ++i) {
+            const int16_t baseInterval = chordFamilyInterval(
+                palette,
+                variant,
+                i,
+                previousBaseInterval,
+                octaveSize,
+                result.intervalUsesScaleDegrees
+            );
+            previousBaseInterval = baseInterval;
+            intervals[i] = spreadInterval(
+                baseInterval,
+                i,
+                voiceCount,
+                recipe.spread,
+                result.intervalUsesScaleDegrees,
+                scaleSettings
+            );
+        }
+    }
 
     for (uint8_t i = 0; i < voiceCount; ++i) {
-        const int16_t baseInterval = chordFamilyInterval(
-            palette,
-            variant,
-            i,
-            previousBaseInterval,
-            octaveSize,
-            result.intervalUsesScaleDegrees
-        );
-        previousBaseInterval = baseInterval;
-
-        const int16_t interval = spreadInterval(
-            baseInterval,
-            i,
-            voiceCount,
-            spec->spread,
-            result.intervalUsesScaleDegrees,
-            scaleSettings
-        );
+        const int16_t interval = intervals[i];
         const uint8_t note = result.intervalUsesScaleDegrees
             ? moveByScaleDegrees(root.note, static_cast<int8_t>(interval), scaleSettings)
             : clampMidiValue(static_cast<int>(root.note) + static_cast<int>(interval));
+        result.rangeLimited =
+            result.rangeLimited || intervalTouchesMidiBoundary(note, interval);
 
         appendVoice(
             result,
@@ -389,6 +637,8 @@ StepSequencerChordResolution resolveStepChord(StepSequencerStepValues root,
             }
         );
     }
+
+    result.droppedVoiceCount = static_cast<uint8_t>(voiceCount - result.count);
 
     return result;
 }

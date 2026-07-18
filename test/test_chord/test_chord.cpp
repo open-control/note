@@ -6,13 +6,16 @@
 
 using oc::note::sequencer::StepSequencerChordMode;
 using oc::note::sequencer::StepSequencerChordAnalysis;
+using oc::note::sequencer::StepSequencerChordHarmony;
 using oc::note::sequencer::StepSequencerChordQuality;
 using oc::note::sequencer::StepSequencerChordResolution;
 using oc::note::sequencer::StepSequencerResolvedChordVoice;
 using oc::note::sequencer::StepSequencerChordSource;
 using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerChordState;
+using oc::note::sequencer::StepSequencerChordVoicing;
 using oc::note::sequencer::StepSequencerInheritedChord;
+using oc::note::sequencer::StepSequencerLegacyChordRecipe;
 using oc::note::sequencer::StepSequencerScaleConstraintMode;
 using oc::note::sequencer::StepSequencerScaleSettings;
 using oc::note::sequencer::StepSequencerScaleType;
@@ -185,7 +188,7 @@ void test_local_child_chord_overrides_inherited_parent_chord() {
     StepSequencerChordState child{};
     child.mode = StepSequencerChordMode::Local;
     child.local = StepSequencerChordSpec{};
-    child.local.color = 1;  // Minor chromatic palette.
+    child.local.setLegacyRecipe({.color = 1});  // Minor chromatic palette.
 
     const auto out = resolveStepChord(root(62), {}, child, inherited);
 
@@ -212,18 +215,19 @@ void test_spec_inputs_are_clamped_before_resolution() {
     StepSequencerChordState chord{};
     chord.mode = StepSequencerChordMode::Local;
     chord.local.voiceCount = 0;
-    chord.local.color = 99;
-    chord.local.variant = 99;
-    chord.local.spread = 99;
+    chord.local.harmonyData = 99;
+    chord.local.voicingData = 99;
+    chord.local.inversionData = 99;
     chord.local.strum = 120;
     chord.local.velocityCurve = -120;
 
     const auto out = resolveStepChord(root(), {}, chord, {}, 16);
+    const auto legacy = out.activeForChildren.spec.legacyRecipe();
 
     TEST_ASSERT_EQUAL_UINT8(1, out.activeForChildren.spec.voiceCount);
-    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_COLOR, out.activeForChildren.spec.color);
-    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_VARIANT, out.activeForChildren.spec.variant);
-    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_SPREAD, out.activeForChildren.spec.spread);
+    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_COLOR, legacy.color);
+    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_VARIANT, legacy.variant);
+    TEST_ASSERT_EQUAL_UINT8(StepSequencerChordSpec::MAX_SPREAD, legacy.spread);
     TEST_ASSERT_EQUAL_INT8(StepSequencerChordSpec::MAX_STRUM, out.activeForChildren.spec.strum);
     TEST_ASSERT_EQUAL_INT8(
         StepSequencerChordSpec::MIN_VELOCITY_CURVE,
@@ -237,7 +241,7 @@ void test_color_axis_changes_default_triad_in_chromatic_mode() {
     for (uint8_t color = 0; color <= StepSequencerChordSpec::MAX_COLOR; ++color) {
         StepSequencerChordState chord{};
         chord.mode = StepSequencerChordMode::Local;
-        chord.local.color = color;
+        chord.local.setLegacyRecipe({.color = color});
 
         const auto out = resolveStepChord(root(60), {}, chord);
         const uint32_t signature = triadIntervalSignature(out);
@@ -252,7 +256,7 @@ void test_color_axis_changes_default_triad_in_constrained_scale() {
     for (uint8_t color = 0; color <= StepSequencerChordSpec::MAX_COLOR; ++color) {
         StepSequencerChordState chord{};
         chord.mode = StepSequencerChordMode::Local;
-        chord.local.color = color;
+        chord.local.setLegacyRecipe({.color = color});
 
         const auto out = resolveStepChord(root(60), cMajor(), chord);
         const uint32_t signature = triadIntervalSignature(out);
@@ -267,7 +271,7 @@ void test_variant_axis_changes_default_color_triad_in_chromatic_mode() {
     for (uint8_t variant = 0; variant <= StepSequencerChordSpec::MAX_VARIANT; ++variant) {
         StepSequencerChordState chord{};
         chord.mode = StepSequencerChordMode::Local;
-        chord.local.variant = variant;
+        chord.local.setLegacyRecipe({.variant = variant});
 
         const auto out = resolveStepChord(root(60), {}, chord);
         const uint32_t signature = triadIntervalSignature(out);
@@ -282,7 +286,7 @@ void test_variant_axis_changes_default_color_triad_in_constrained_scale() {
     for (uint8_t variant = 0; variant <= StepSequencerChordSpec::MAX_VARIANT; ++variant) {
         StepSequencerChordState chord{};
         chord.mode = StepSequencerChordMode::Local;
-        chord.local.variant = variant;
+        chord.local.setLegacyRecipe({.variant = variant});
 
         const auto out = resolveStepChord(root(60), cMajor(), chord);
         const uint32_t signature = triadIntervalSignature(out);
@@ -297,7 +301,7 @@ void test_spread_axis_changes_three_voice_spacing_at_each_step() {
     for (uint8_t spread = 0; spread <= StepSequencerChordSpec::MAX_SPREAD; ++spread) {
         StepSequencerChordState chord{};
         chord.mode = StepSequencerChordMode::Local;
-        chord.local.spread = spread;
+        chord.local.setLegacyRecipe({.spread = spread});
 
         const auto out = resolveStepChord(root(60), {}, chord);
         const uint32_t signature = triadIntervalSignature(out);
@@ -309,7 +313,7 @@ void test_spread_axis_changes_three_voice_spacing_at_each_step() {
 void test_spread_opens_upper_voices_by_octaves() {
     StepSequencerChordState chord{};
     chord.mode = StepSequencerChordMode::Local;
-    chord.local.spread = 1;
+    chord.local.setLegacyRecipe({.spread = 1});
 
     const auto out = resolveStepChord(root(60), {}, chord);
 
@@ -354,12 +358,150 @@ void test_duplicate_clamped_pitches_are_deduplicated() {
     StepSequencerChordState chord{};
     chord.mode = StepSequencerChordMode::Local;
     chord.local.voiceCount = 8;
-    chord.local.spread = 7;
+    chord.local.setLegacyRecipe({.spread = 7});
 
     const auto out = resolveStepChord(root(127), {}, chord);
 
     TEST_ASSERT_EQUAL_UINT8(1, out.count);
     TEST_ASSERT_EQUAL_UINT8(127, out.voices[0].note);
+}
+
+void test_semantic_spec_keeps_six_byte_graph_footprint() {
+    TEST_ASSERT_EQUAL_UINT8(6, sizeof(StepSequencerChordSpec));
+
+    const auto spec = StepSequencerChordSpec::semantic(
+        StepSequencerChordHarmony::Minor7,
+        4,
+        StepSequencerChordVoicing::Open,
+        2
+    );
+    TEST_ASSERT_TRUE(spec.isSemantic());
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordHarmony::Minor7),
+        static_cast<uint8_t>(spec.harmony())
+    );
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordVoicing::Open),
+        static_cast<uint8_t>(spec.voicing())
+    );
+    TEST_ASSERT_EQUAL_UINT8(2, spec.inversion());
+}
+
+void test_semantic_chromatic_major_resolves_named_quality() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(StepSequencerChordHarmony::Major);
+
+    const auto out = resolveStepChord(root(60), {}, chord);
+    const auto analysis = analyzeResolvedChord(out, root(60));
+
+    TEST_ASSERT_TRUE(out.semanticRecipe);
+    TEST_ASSERT_FALSE(out.intervalUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT8(60, out.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(64, out.voices[1].note);
+    TEST_ASSERT_EQUAL_UINT8(67, out.voices[2].note);
+    TEST_ASSERT_TRUE(analysis.recognized);
+    assertQuality(StepSequencerChordQuality::Major, analysis);
+}
+
+void test_semantic_diatonic_seventh_stays_inside_scale() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(
+        StepSequencerChordHarmony::DiatonicSeventh,
+        4
+    );
+
+    const auto out = resolveStepChord(root(62), cMajor(), chord);
+
+    TEST_ASSERT_TRUE(out.intervalUsesScaleDegrees);
+    TEST_ASSERT_EQUAL_UINT8(4, out.count);
+    TEST_ASSERT_EQUAL_UINT8(62, out.voices[0].note);  // D
+    TEST_ASSERT_EQUAL_UINT8(65, out.voices[1].note);  // F
+    TEST_ASSERT_EQUAL_UINT8(69, out.voices[2].note);  // A
+    TEST_ASSERT_EQUAL_UINT8(72, out.voices[3].note);  // C
+}
+
+void test_semantic_true_inversion_rotates_lowest_voices() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(
+        StepSequencerChordHarmony::Major,
+        3,
+        StepSequencerChordVoicing::Close,
+        1
+    );
+
+    const auto first = resolveStepChord(root(60), {}, chord);
+    const auto firstAnalysis = analyzeResolvedChord(first, root(60));
+    TEST_ASSERT_EQUAL_UINT8(64, first.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(67, first.voices[1].note);
+    TEST_ASSERT_EQUAL_UINT8(72, first.voices[2].note);
+    TEST_ASSERT_EQUAL_UINT8(1, first.effectiveInversion);
+    TEST_ASSERT_TRUE(firstAnalysis.slash);
+    TEST_ASSERT_EQUAL_UINT8(4, firstAnalysis.bassPitchClass);
+
+    chord.local.setInversion(2);
+    const auto second = resolveStepChord(root(60), {}, chord);
+    TEST_ASSERT_EQUAL_UINT8(67, second.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(72, second.voices[1].note);
+    TEST_ASSERT_EQUAL_UINT8(76, second.voices[2].note);
+    TEST_ASSERT_EQUAL_UINT8(2, second.effectiveInversion);
+}
+
+void test_semantic_voicing_changes_register_not_membership() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(StepSequencerChordHarmony::Major);
+
+    const auto close = resolveStepChord(root(60), {}, chord);
+    chord.local.setVoicing(StepSequencerChordVoicing::Open);
+    const auto open = resolveStepChord(root(60), {}, chord);
+    chord.local.setVoicing(StepSequencerChordVoicing::Wide);
+    const auto wide = resolveStepChord(root(60), {}, chord);
+
+    TEST_ASSERT_EQUAL_UINT8(67, close.voices[2].note);
+    TEST_ASSERT_EQUAL_UINT8(79, open.voices[2].note);
+    TEST_ASSERT_EQUAL_UINT8(76, wide.voices[1].note);
+    TEST_ASSERT_EQUAL_UINT8(79, wide.voices[2].note);
+    assertQuality(
+        StepSequencerChordQuality::Major,
+        analyzeResolvedChord(open, root(60))
+    );
+    assertQuality(
+        StepSequencerChordQuality::Major,
+        analyzeResolvedChord(wide, root(60))
+    );
+}
+
+void test_semantic_harmony_is_safely_adapted_to_pitch_mode() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(StepSequencerChordHarmony::Major);
+
+    const auto out = resolveStepChord(root(60), cNaturalMinor(), chord);
+
+    TEST_ASSERT_TRUE(out.harmonyAdjustedForPitchMode);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(StepSequencerChordHarmony::DiatonicTriad),
+        static_cast<uint8_t>(out.harmony)
+    );
+    TEST_ASSERT_EQUAL_UINT8(60, out.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(63, out.voices[1].note);
+    TEST_ASSERT_EQUAL_UINT8(67, out.voices[2].note);
+}
+
+void test_semantic_inversion_is_bounded_and_reported() {
+    StepSequencerChordState chord{};
+    chord.mode = StepSequencerChordMode::Local;
+    chord.local = StepSequencerChordSpec::semantic(StepSequencerChordHarmony::Major);
+    chord.local.setInversion(7);
+
+    const auto out = resolveStepChord(root(60), {}, chord);
+
+    TEST_ASSERT_TRUE(out.inversionClamped);
+    TEST_ASSERT_EQUAL_UINT8(2, out.effectiveInversion);
 }
 
 void test_analyze_resolved_major_triad() {
@@ -432,6 +574,13 @@ int main() {
     RUN_TEST(test_signed_strum_distributes_voice_delays);
     RUN_TEST(test_velocity_curve_is_applied_per_voice);
     RUN_TEST(test_duplicate_clamped_pitches_are_deduplicated);
+    RUN_TEST(test_semantic_spec_keeps_six_byte_graph_footprint);
+    RUN_TEST(test_semantic_chromatic_major_resolves_named_quality);
+    RUN_TEST(test_semantic_diatonic_seventh_stays_inside_scale);
+    RUN_TEST(test_semantic_true_inversion_rotates_lowest_voices);
+    RUN_TEST(test_semantic_voicing_changes_register_not_membership);
+    RUN_TEST(test_semantic_harmony_is_safely_adapted_to_pitch_mode);
+    RUN_TEST(test_semantic_inversion_is_bounded_and_reported);
     RUN_TEST(test_analyze_resolved_major_triad);
     RUN_TEST(test_analyze_resolved_minor_seventh);
     RUN_TEST(test_analyze_prefers_step_root_for_inversion);
