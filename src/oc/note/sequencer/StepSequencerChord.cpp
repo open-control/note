@@ -146,28 +146,37 @@ uint8_t clampMidiValue(int value) {
     return static_cast<uint8_t>(value);
 }
 
-uint8_t chordPitchClass(uint8_t note) {
+FLASHMEM uint8_t chordPitchClass(uint8_t note) {
     return static_cast<uint8_t>(note % 12U);
 }
 
-uint8_t chromaticDistance(uint8_t fromPitchClass, uint8_t toPitchClass) {
+FLASHMEM uint8_t chromaticDistance(uint8_t fromPitchClass, uint8_t toPitchClass) {
     return static_cast<uint8_t>((toPitchClass + 12U - fromPitchClass) % 12U);
 }
 
-bool containsPitchClass(const StepSequencerChordAnalysis& analysis, uint8_t pitchClassValue) {
+FLASHMEM bool containsPitchClass(
+    const StepSequencerChordAnalysis& analysis,
+    uint8_t pitchClassValue
+) {
     for (uint8_t i = 0; i < analysis.pitchClassCount; ++i) {
         if (analysis.pitchClasses[i] == pitchClassValue) return true;
     }
     return false;
 }
 
-void appendPitchClass(StepSequencerChordAnalysis& analysis, uint8_t pitchClassValue) {
+FLASHMEM void appendPitchClass(
+    StepSequencerChordAnalysis& analysis,
+    uint8_t pitchClassValue
+) {
     if (analysis.pitchClassCount >= analysis.pitchClasses.size()) return;
     if (containsPitchClass(analysis, pitchClassValue)) return;
     analysis.pitchClasses[analysis.pitchClassCount++] = pitchClassValue;
 }
 
-uint16_t chordMaskForRoot(const StepSequencerChordAnalysis& analysis, uint8_t rootPitchClass) {
+FLASHMEM uint16_t chordMaskForRoot(
+    const StepSequencerChordAnalysis& analysis,
+    uint8_t rootPitchClass
+) {
     uint16_t mask = 0;
     for (uint8_t i = 0; i < analysis.pitchClassCount; ++i) {
         mask = static_cast<uint16_t>(
@@ -177,14 +186,14 @@ uint16_t chordMaskForRoot(const StepSequencerChordAnalysis& analysis, uint8_t ro
     return mask;
 }
 
-StepSequencerChordQuality qualityForMask(uint16_t mask) {
+FLASHMEM StepSequencerChordQuality qualityForMask(uint16_t mask) {
     for (const auto& pattern : CHORD_QUALITY_PATTERNS) {
         if (pattern.mask == mask) return pattern.quality;
     }
     return StepSequencerChordQuality::Unknown;
 }
 
-void buildChromaticIntervals(StepSequencerChordAnalysis& analysis) {
+FLASHMEM void buildChromaticIntervals(StepSequencerChordAnalysis& analysis) {
     analysis.intervalCount = 0;
     for (uint8_t interval = 0; interval < 12U; ++interval) {
         const uint8_t pitch = static_cast<uint8_t>((analysis.rootPitchClass + interval) % 12U);
@@ -367,7 +376,7 @@ void appendVoice(StepSequencerChordResolution& result,
 
 }  // namespace
 
-StepSequencerChordSpec StepSequencerChordSpec::semantic(
+FLASHMEM StepSequencerChordSpec StepSequencerChordSpec::semantic(
     StepSequencerChordHarmony harmonyValue,
     uint8_t voices,
     StepSequencerChordVoicing voicingValue,
@@ -411,7 +420,7 @@ StepSequencerLegacyChordRecipe StepSequencerChordSpec::legacyRecipe() const {
     };
 }
 
-void StepSequencerChordSpec::setHarmony(StepSequencerChordHarmony harmonyValue) {
+FLASHMEM void StepSequencerChordSpec::setHarmony(StepSequencerChordHarmony harmonyValue) {
     if (!isSemantic()) {
         voicingData = static_cast<uint8_t>(StepSequencerChordVoicing::Close);
         inversionData = 0;
@@ -422,19 +431,21 @@ void StepSequencerChordSpec::setHarmony(StepSequencerChordHarmony harmonyValue) 
     clamp();
 }
 
-void StepSequencerChordSpec::setVoicing(StepSequencerChordVoicing voicingValue) {
+FLASHMEM void StepSequencerChordSpec::setVoicing(StepSequencerChordVoicing voicingValue) {
     if (!isSemantic()) setHarmony(StepSequencerChordHarmony::DiatonicTriad);
     voicingData = static_cast<uint8_t>(voicingValue);
     clamp();
 }
 
-void StepSequencerChordSpec::setInversion(uint8_t inversionValue) {
+FLASHMEM void StepSequencerChordSpec::setInversion(uint8_t inversionValue) {
     if (!isSemantic()) setHarmony(StepSequencerChordHarmony::DiatonicTriad);
     inversionData = inversionValue;
     clamp();
 }
 
-void StepSequencerChordSpec::setLegacyRecipe(StepSequencerLegacyChordRecipe recipe) {
+FLASHMEM void StepSequencerChordSpec::setLegacyRecipe(
+    StepSequencerLegacyChordRecipe recipe
+) {
     harmonyData = recipe.color;
     voicingData = recipe.variant;
     inversionData = recipe.spread;
@@ -465,7 +476,10 @@ void StepSequencerChordSpec::clamp() {
     velocityCurve = clampSigned(velocityCurve, MIN_VELOCITY_CURVE, MAX_VELOCITY_CURVE);
 }
 
-bool chordHarmonyAvailable(StepSequencerChordHarmony harmony, bool scaleConstrained) {
+FLASHMEM bool chordHarmonyAvailable(
+    StepSequencerChordHarmony harmony,
+    bool scaleConstrained
+) {
     const uint8_t value = static_cast<uint8_t>(harmony);
     if (value >= static_cast<uint8_t>(StepSequencerChordHarmony::Count)) return false;
     return scaleConstrained
@@ -473,11 +487,14 @@ bool chordHarmonyAvailable(StepSequencerChordHarmony harmony, bool scaleConstrai
         : value >= CHROMATIC_HARMONY_FIRST;
 }
 
-uint8_t chordHarmonyChoiceCount(bool scaleConstrained) {
+FLASHMEM uint8_t chordHarmonyChoiceCount(bool scaleConstrained) {
     return scaleConstrained ? SCALE_HARMONY_COUNT : CHROMATIC_HARMONY_COUNT;
 }
 
-StepSequencerChordHarmony chordHarmonyForChoice(uint8_t index, bool scaleConstrained) {
+FLASHMEM StepSequencerChordHarmony chordHarmonyForChoice(
+    uint8_t index,
+    bool scaleConstrained
+) {
     const uint8_t count = chordHarmonyChoiceCount(scaleConstrained);
     if (index >= count) index = static_cast<uint8_t>(count - 1U);
     return static_cast<StepSequencerChordHarmony>(
@@ -485,7 +502,7 @@ StepSequencerChordHarmony chordHarmonyForChoice(uint8_t index, bool scaleConstra
     );
 }
 
-uint8_t chordHarmonyChoiceIndex(
+FLASHMEM uint8_t chordHarmonyChoiceIndex(
     StepSequencerChordHarmony harmony,
     bool scaleConstrained
 ) {
@@ -496,13 +513,13 @@ uint8_t chordHarmonyChoiceIndex(
         : static_cast<uint8_t>(value - CHROMATIC_HARMONY_FIRST);
 }
 
-StepSequencerChordHarmony defaultChordHarmony(bool scaleConstrained) {
+FLASHMEM StepSequencerChordHarmony defaultChordHarmony(bool scaleConstrained) {
     return scaleConstrained
         ? StepSequencerChordHarmony::DiatonicTriad
         : StepSequencerChordHarmony::Major;
 }
 
-uint8_t recommendedChordVoiceCount(StepSequencerChordHarmony harmony) {
+FLASHMEM uint8_t recommendedChordVoiceCount(StepSequencerChordHarmony harmony) {
     switch (harmony) {
         case StepSequencerChordHarmony::DiatonicSeventh:
         case StepSequencerChordHarmony::Dominant7:
@@ -514,13 +531,13 @@ uint8_t recommendedChordVoiceCount(StepSequencerChordHarmony harmony) {
     }
 }
 
-StepSequencerChordState defaultRootChordState() {
+FLASHMEM StepSequencerChordState defaultRootChordState() {
     StepSequencerChordState state{};
     state.mode = StepSequencerChordMode::Single;
     return state;
 }
 
-StepSequencerChordState defaultChildChordState() {
+FLASHMEM StepSequencerChordState defaultChildChordState() {
     StepSequencerChordState state{};
     state.mode = StepSequencerChordMode::Inherit;
     return state;
@@ -643,7 +660,7 @@ StepSequencerChordResolution resolveStepChord(StepSequencerStepValues root,
     return result;
 }
 
-StepSequencerChordAnalysis analyzeResolvedChord(
+FLASHMEM StepSequencerChordAnalysis analyzeResolvedChord(
     const StepSequencerChordResolution& resolution,
     StepSequencerStepValues root
 ) {
