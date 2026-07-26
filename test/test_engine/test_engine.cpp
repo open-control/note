@@ -26,6 +26,7 @@ using oc::note::sequencer::StepSequencerChordMode;
 using oc::note::sequencer::StepSequencerChordSource;
 using oc::note::sequencer::StepSequencerChordSpec;
 using oc::note::sequencer::StepSequencerGraph;
+using oc::note::sequencer::StepSequencerPlaybackRegion;
 using oc::note::sequencer::StepSequencerSequenceKind;
 using oc::note::sequencer::StepSequencerScaleConstraintMode;
 using oc::note::sequencer::StepSequencerScaleSettings;
@@ -382,6 +383,152 @@ void test_playhead_tick_position_tracks_offset_inside_current_step() {
     eng.update(6, false);
     TEST_ASSERT_EQUAL(-1, st.playheadStep);
     TEST_ASSERT_EQUAL_UINT16(0, st.playheadStepTickOffset);
+}
+
+void test_engine_default_region_tracks_legacy_state_length() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+
+    auto region = eng.playbackRegion();
+    TEST_ASSERT_TRUE(region.isValid());
+    TEST_ASSERT_EQUAL_UINT8(4, region.contentLength);
+    TEST_ASSERT_EQUAL_UINT8(0, region.playStart);
+    TEST_ASSERT_EQUAL_UINT8(0, region.loopStart);
+    TEST_ASSERT_EQUAL_UINT8(4, region.loopEnd);
+
+    st.length = 16;
+    region = eng.playbackRegion();
+    TEST_ASSERT_TRUE(region.isValid());
+    TEST_ASSERT_EQUAL_UINT8(16, region.contentLength);
+    TEST_ASSERT_EQUAL_UINT8(16, region.loopEnd);
+}
+
+void test_engine_rejects_invalid_region_without_changing_active_region() {
+    StepSequencerRuntimeState st;
+    st.length = 8;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    const auto before = eng.playbackRegion();
+    const StepSequencerPlaybackRegion invalid{
+        .contentLength = 8,
+        .playStart = 5,
+        .loopStart = 4,
+        .loopEnd = 8,
+    };
+
+    TEST_ASSERT_FALSE(eng.setPlaybackRegion(invalid));
+    const auto after = eng.playbackRegion();
+    TEST_ASSERT_EQUAL_UINT8(before.contentLength, after.contentLength);
+    TEST_ASSERT_EQUAL_UINT8(before.playStart, after.playStart);
+    TEST_ASSERT_EQUAL_UINT8(before.loopStart, after.loopStart);
+    TEST_ASSERT_EQUAL_UINT8(before.loopEnd, after.loopEnd);
+}
+
+void test_engine_plays_prelude_once_then_repeats_internal_loop() {
+    StepSequencerRuntimeState st;
+    st.length = 8;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64(0xFFULL);
+    for (uint8_t i = 0; i < 8; ++i) {
+        st.note[i] = static_cast<uint8_t>(60 + i);
+        st.velocity[i] = 100;
+        st.gate[i] = 100;
+    }
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    TEST_ASSERT_TRUE(eng.setPlaybackRegion(StepSequencerPlaybackRegion{
+        .contentLength = 8,
+        .playStart = 2,
+        .loopStart = 4,
+        .loopEnd = 6,
+    }));
+
+    eng.update(0, true);
+    eng.update(6, true);
+    eng.update(12, true);
+    eng.update(18, true);
+    eng.update(24, true);
+    eng.update(30, true);
+
+    TEST_ASSERT_EQUAL(6, countType(sink.events, SequencerEventType::NoteOn));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 62));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 6, 63));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 12, 64));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 18, 65));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 24, 64));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 30, 65));
+    TEST_ASSERT_EQUAL(5, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT32(1, st.probabilityCycleIndex);
+}
+
+void test_engine_resync_uses_same_region_for_playhead_probability_and_next_note() {
+    StepSequencerRuntimeState st;
+    st.length = 8;
+    st.stepsPerBeat = 4;
+    st.midiChannel = 0;
+    st.enabledMask = StepBitMask128::fromLower64((1ULL << 4) | (1ULL << 5));
+    st.note[4] = 64;
+    st.note[5] = 65;
+    st.velocity[4] = 100;
+    st.velocity[5] = 100;
+    st.gate[4] = 100;
+    st.gate[5] = 100;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    TEST_ASSERT_TRUE(eng.setPlaybackRegion(StepSequencerPlaybackRegion{
+        .contentLength = 8,
+        .playStart = 2,
+        .loopStart = 4,
+        .loopEnd = 6,
+    }));
+
+    eng.resyncToTick(31);
+    TEST_ASSERT_EQUAL(5, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT16(1, st.playheadStepTickOffset);
+    TEST_ASSERT_EQUAL_UINT32(1, st.probabilityCycleIndex);
+    TEST_ASSERT_TRUE(st.lastResolvedVariation.stepIndex == 5);
+
+    sink.events.clear();
+    eng.update(35, true);
+    TEST_ASSERT_EQUAL(0, countType(sink.events, SequencerEventType::NoteOn));
+    eng.update(36, true);
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 36, 64));
+    TEST_ASSERT_EQUAL(4, st.playheadStep);
+    TEST_ASSERT_EQUAL_UINT32(2, st.probabilityCycleIndex);
+}
+
+void test_engine_can_restore_state_length_region_after_explicit_region() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL << 0);
+    st.note[0] = 60;
+    st.velocity[0] = 100;
+    st.gate[0] = 100;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    TEST_ASSERT_TRUE(eng.setPlaybackRegion(StepSequencerPlaybackRegion{
+        .contentLength = 4,
+        .playStart = 2,
+        .loopStart = 2,
+        .loopEnd = 4,
+    }));
+    eng.useStateLengthPlaybackRegion();
+
+    eng.update(0, true);
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 0, 60));
+    const auto region = eng.playbackRegion();
+    TEST_ASSERT_EQUAL_UINT8(0, region.playStart);
+    TEST_ASSERT_EQUAL_UINT8(0, region.loopStart);
+    TEST_ASSERT_EQUAL_UINT8(4, region.loopEnd);
 }
 
 void test_positive_nudge_delays_note_on_and_note_off() {
@@ -1157,6 +1304,11 @@ int main() {
     RUN_TEST(test_different_pitch_overlap_keeps_original_note_off);
     RUN_TEST(test_boundary_order_note_off_before_next_step);
     RUN_TEST(test_playhead_tick_position_tracks_offset_inside_current_step);
+    RUN_TEST(test_engine_default_region_tracks_legacy_state_length);
+    RUN_TEST(test_engine_rejects_invalid_region_without_changing_active_region);
+    RUN_TEST(test_engine_plays_prelude_once_then_repeats_internal_loop);
+    RUN_TEST(test_engine_resync_uses_same_region_for_playhead_probability_and_next_note);
+    RUN_TEST(test_engine_can_restore_state_length_region_after_explicit_region);
     RUN_TEST(test_positive_nudge_delays_note_on_and_note_off);
     RUN_TEST(test_negative_nudge_triggers_before_quantized_boundary);
     RUN_TEST(test_note_off_stays_before_next_note_on_when_nudged);

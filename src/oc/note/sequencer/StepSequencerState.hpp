@@ -28,7 +28,6 @@ struct StepSequencerState {
     // Defaults
     static constexpr uint8_t DEFAULT_LENGTH = 8;
     static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 4;  // 1/16
-    static constexpr uint8_t DEFAULT_MIDI_CHANNEL_0BASED = 0;  // channel 1
     static constexpr uint8_t DEFAULT_NOTE = 48;  // C3
     static constexpr uint8_t DEFAULT_VELOCITY = 64;
     static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
@@ -40,7 +39,6 @@ struct StepSequencerState {
     Signal<uint8_t, 8> length{DEFAULT_LENGTH};
     Signal<int16_t> playheadStep{-1};
     Signal<uint8_t, 6> stepsPerBeat{DEFAULT_STEPS_PER_BEAT};
-    Signal<uint8_t, 6> midiChannel{DEFAULT_MIDI_CHANNEL_0BASED};
 
     // Step enable flags
     Signal<StepBitMask128> enabledMask{};
