@@ -17,6 +17,7 @@ using oc::note::sequencer::STEP_NODE_NUDGE_OFFSET;
 using oc::note::sequencer::STEP_NODE_PROBABILITY_OFFSET;
 using oc::note::sequencer::STEP_NODE_VELOCITY_OFFSET;
 using oc::note::sequencer::StepBitMask128;
+using oc::note::sequencer::StepSequencerChordHarmony;
 using oc::note::sequencer::StepSequencerChordMode;
 using oc::note::sequencer::StepSequencerChordSource;
 using oc::note::sequencer::StepSequencerChordSpec;
@@ -373,6 +374,26 @@ void test_root_local_chord_reports_scale_degree_intervals_when_constrained() {
     TEST_ASSERT_EQUAL_INT16(4, out.notes[2].chordInterval);
 }
 
+void test_semantic_inversion_preview_matches_expanded_notes() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    setLocalChord(
+        graph,
+        0,
+        StepSequencerChordSpec::semantic(StepSequencerChordHarmony::Major, 3, {}, 1)
+    );
+
+    const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
+
+    TEST_ASSERT_EQUAL_UINT8(3, out.count);
+    TEST_ASSERT_EQUAL_UINT8(64, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(67, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(72, out.notes[2].variation.resolved.note);
+    TEST_ASSERT_EQUAL_INT16(4, out.notes[0].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(7, out.notes[1].chordInterval);
+    TEST_ASSERT_EQUAL_INT16(12, out.notes[2].chordInterval);
+}
+
 void test_micro_sequence_child_inherits_parent_chord_from_child_root() {
     auto state = baseState();
     auto graph = graphWithRoot();
@@ -424,7 +445,7 @@ void test_micro_sequence_child_local_chord_overrides_parent_chord() {
     graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
     graph.stepNodes[4].noteOffset = 2;
     StepSequencerChordSpec minor{};
-    minor.color = 1;
+    minor.setLegacyRecipe({.color = 1});
     setLocalChord(graph, 4, minor);
 
     const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
@@ -1107,6 +1128,7 @@ int main() {
     RUN_TEST(test_micro_sequence_pitch_offset_resolves_from_current_cycle_state_scale_degree);
     RUN_TEST(test_root_local_chord_expands_to_multiple_voices);
     RUN_TEST(test_root_local_chord_reports_scale_degree_intervals_when_constrained);
+    RUN_TEST(test_semantic_inversion_preview_matches_expanded_notes);
     RUN_TEST(test_micro_sequence_child_inherits_parent_chord_from_child_root);
     RUN_TEST(test_micro_sequence_child_single_blocks_parent_chord);
     RUN_TEST(test_micro_sequence_child_local_chord_overrides_parent_chord);

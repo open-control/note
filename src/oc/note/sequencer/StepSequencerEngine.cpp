@@ -16,9 +16,12 @@ void StepSequencerEngine::reset() {
     stop_();
     scheduler_.clear();
     last_tick_ = 0;
+    emission_horizon_tick_ = 0;
+    emission_horizon_valid_ = false;
     next_step_tick_ = 0;
-    next_scheduled_step_number_ = 0;
+    next_scheduled_playback_ordinal_ = 0;
     published_cycle_index_ = UINT32_MAX;
+    published_playback_ordinal_ = UINT32_MAX;
     cycle_variation_telemetry_published_ = false;
     timing_context_valid_ = false;
     clearCycleMaskCache_();
@@ -32,6 +35,23 @@ void StepSequencerEngine::reset() {
     state_.cycleVariationTelemetry.reset();
     state_.expandedVariationTelemetry.reset();
     state_.variationTelemetryRevision += 1U;
+}
+
+bool StepSequencerEngine::setPlaybackRegion(const StepSequencerPlaybackRegion& region) {
+    if (!region.isValid()) {
+        return false;
+    }
+
+    explicit_playback_region_ = region;
+    return true;
+}
+
+void StepSequencerEngine::useStateLengthPlaybackRegion() {
+    explicit_playback_region_ = StepSequencerPlaybackRegion{0, 0, 0, 0};
+}
+
+StepSequencerPlaybackRegion StepSequencerEngine::playbackRegion() const {
+    return activePlaybackRegion_();
 }
 
 void StepSequencerEngine::resyncToTick(uint32_t tick) {
@@ -50,8 +70,36 @@ uint8_t StepSequencerEngine::clampSwingPercent_(uint8_t swingPercent) {
 }
 
 uint8_t StepSequencerEngine::patternLength_() const {
-    const uint8_t len = state_.patternLength();
-    return len;
+    const auto region = activePlaybackRegion_();
+    return region.isValid() ? region.contentLength : 0;
+}
+
+StepSequencerPlaybackRegion StepSequencerEngine::activePlaybackRegion_() const {
+    if (explicit_playback_region_.isValid()) {
+        return explicit_playback_region_;
+    }
+    return StepSequencerPlaybackRegion::fullLength(state_.patternLength());
+}
+
+bool StepSequencerEngine::resolvePlaybackOrdinal_(
+    uint32_t ordinal,
+    StepSequencerPlaybackPosition& output) const {
+    return tryResolvePlaybackOrdinal(activePlaybackRegion_(), ordinal, output);
+}
+
+bool StepSequencerEngine::resolvePlaybackTick_(
+    uint32_t tick,
+    uint16_t ticksPerStep,
+    StepSequencerPlaybackTickPosition& output) const {
+    return tryResolvePlaybackTick(activePlaybackRegion_(), tick, ticksPerStep, output);
+}
+
+bool StepSequencerEngine::samePlaybackRegion_(const StepSequencerPlaybackRegion& left,
+                                              const StepSequencerPlaybackRegion& right) {
+    return left.contentLength == right.contentLength &&
+           left.playStart == right.playStart &&
+           left.loopStart == right.loopStart &&
+           left.loopEnd == right.loopEnd;
 }
 
 uint8_t StepSequencerEngine::ticksPerStep_() const {
@@ -84,10 +132,10 @@ uint32_t StepSequencerEngine::swingTickOffset_(uint8_t stepIndex,
     return (scaled + 100U) / 200U;
 }
 
-uint32_t StepSequencerEngine::timedStepStartTick_(uint32_t stepNumber,
+uint32_t StepSequencerEngine::timedStepStartTick_(uint32_t playbackOrdinal,
                                                   uint8_t stepIndex,
                                                   uint8_t ticksPerStep) const {
-    const uint32_t base = stepNumber * static_cast<uint32_t>(ticksPerStep);
+    const uint32_t base = playbackOrdinal * static_cast<uint32_t>(ticksPerStep);
     const uint32_t swing =
         swingTickOffset_(stepIndex, ticksPerStep, state_.effectiveSwingPercent);
     const int32_t patternNudge =
@@ -155,10 +203,10 @@ StepBitMask128 StepSequencerEngine::maskForCycle_(uint32_t cycleIndex, uint8_t l
     return mask;
 }
 
-bool StepSequencerEngine::shouldTriggerStep_(uint8_t stepIndex, uint32_t stepNumber, uint8_t len) {
-    if (len == 0 || stepIndex >= len) return false;
-    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
-    return maskForCycle_(cycleIndex, len).test(stepIndex);
+bool StepSequencerEngine::shouldTriggerStep_(const StepSequencerPlaybackPosition& position,
+                                             uint8_t len) {
+    if (len == 0 || position.stepIndex >= len) return false;
+    return maskForCycle_(position.loopCycleIndex, len).test(position.stepIndex);
 }
 
 void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
@@ -186,9 +234,12 @@ void StepSequencerEngine::start_() {
     scheduler_.clear();
     next_step_tick_ = 0;
     last_tick_ = 0;
-    next_scheduled_step_number_ = 0;
+    emission_horizon_tick_ = 0;
+    emission_horizon_valid_ = false;
+    next_scheduled_playback_ordinal_ = 0;
     ++run_seed_;
     published_cycle_index_ = UINT32_MAX;
+    published_playback_ordinal_ = UINT32_MAX;
     cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
@@ -204,17 +255,20 @@ void StepSequencerEngine::start_() {
 void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
-    rememberTimingContext_(ticksPerStep, len);
+    rememberTimingContext_(ticksPerStep);
 
     last_tick_ = tick;
+    emission_horizon_tick_ = tick;
+    emission_horizon_valid_ = true;
     published_cycle_index_ = UINT32_MAX;
+    published_playback_ordinal_ = UINT32_MAX;
     cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
 
     if (len == 0) {
         next_step_tick_ = 0;
-        next_scheduled_step_number_ = 0;
+        next_scheduled_playback_ordinal_ = 0;
         state_.playheadStep = -1;
         state_.playheadStepTickOffset = 0;
         state_.playheadStepTicks = ticksPerStep;
@@ -229,19 +283,24 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
         return;
     }
 
-    const uint32_t stepNumber = tick / ticksPerStep;
-    const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
-    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
+    StepSequencerPlaybackTickPosition tickPosition{};
+    if (!resolvePlaybackTick_(tick, ticksPerStep, tickPosition)) {
+        return;
+    }
+    const auto& position = tickPosition.playback;
 
-    publishCycleMask_(cycleIndex, len);
-    publishPlayheadTickPosition_(tick, ticksPerStep, len);
-    publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
+    publishCycleMask_(position.loopCycleIndex, len);
+    publishPlayheadPosition_(tickPosition);
+    publishResolvedVariation_(position.stepIndex,
+                              position.loopCycleIndex,
+                              shouldTriggerStep_(position, len));
+    published_playback_ordinal_ = position.ordinal;
 
-    next_step_tick_ = (stepNumber + 1U) * static_cast<uint32_t>(ticksPerStep);
-    next_scheduled_step_number_ = stepNumber + 1U;
-    while (next_scheduled_step_number_ < stepNumber + 4U) {
-        scheduleStep_(next_scheduled_step_number_, ticksPerStep);
-        ++next_scheduled_step_number_;
+    next_step_tick_ = static_cast<uint32_t>(tickPosition.nextStepTick);
+    next_scheduled_playback_ordinal_ = position.ordinal + 1U;
+    while (next_scheduled_playback_ordinal_ < position.ordinal + 4U) {
+        scheduleStep_(next_scheduled_playback_ordinal_, ticksPerStep);
+        ++next_scheduled_playback_ordinal_;
     }
 }
 
@@ -254,6 +313,9 @@ void StepSequencerEngine::stop_() {
     state_.playheadStepTickOffset = 0;
     state_.playheadStepTicks = ticksPerStep_();
     published_cycle_index_ = UINT32_MAX;
+    published_playback_ordinal_ = UINT32_MAX;
+    emission_horizon_tick_ = 0;
+    emission_horizon_valid_ = false;
     cycle_variation_telemetry_published_ = false;
     clearCycleMaskCache_();
     last_enabled_mask_ = state_.enabledMask;
@@ -267,42 +329,72 @@ void StepSequencerEngine::stop_() {
 }
 
 void StepSequencerEngine::update(uint32_t tick, bool playing) {
+    (void)update_(tick, tick, playing, false);
+}
+
+bool StepSequencerEngine::updateWithEmissionHorizon(uint32_t tick,
+                                                    uint32_t emissionHorizonTick,
+                                                    bool playing) {
+    return update_(tick, emissionHorizonTick, playing, true);
+}
+
+bool StepSequencerEngine::update_(uint32_t tick,
+                                  uint32_t emissionHorizonTick,
+                                  bool playing,
+                                  bool requireExplicitResync) {
+    if (playing && emissionHorizonTick < tick) {
+        return false;
+    }
+
+    if (playing && playing_ && requireExplicitResync) {
+        if (tick < last_tick_ ||
+            (emission_horizon_valid_ && emissionHorizonTick < emission_horizon_tick_) ||
+            timingContextChanged_(ticksPerStep_())) {
+            return false;
+        }
+    }
+
     if (playing && !playing_) {
         start_();
     } else if (!playing && playing_) {
         stop_();
-        return;
+        return true;
     }
 
-    if (!playing_) return;
+    if (!playing_) return true;
 
-    const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
-    if (timingContextChanged_(ticksPerStep, len)) {
+    if (timingContextChanged_(ticksPerStep)) {
+        if (requireExplicitResync) {
+            return false;
+        }
         resyncTimingContext_(tick);
         last_tick_ = tick;
-        return;
+        return true;
     }
 
+    bool forceTelemetry = false;
     const StepBitMask128 enabledMask = state_.enabledMask;
     if (enabledMask != last_enabled_mask_) {
         last_enabled_mask_ = enabledMask;
         clearCycleMaskCache_();
         published_cycle_index_ = UINT32_MAX;
         cycle_variation_telemetry_published_ = false;
-        if (len > 0) {
-            const uint32_t currentStepNumber = next_step_tick_ / ticksPerStep;
-            const uint32_t currentCycleIndex = currentStepNumber / static_cast<uint32_t>(len);
-            publishCycleMask_(currentCycleIndex, len);
-        }
+        forceTelemetry = true;
     }
 
     // Handle tick resets defensively.
     if (tick < last_tick_) {
+        if (requireExplicitResync) {
+            return false;
+        }
         scheduler_.clear();
+        emission_horizon_tick_ = 0;
+        emission_horizon_valid_ = false;
         next_step_tick_ = 0;
-        next_scheduled_step_number_ = 0;
+        next_scheduled_playback_ordinal_ = 0;
         published_cycle_index_ = UINT32_MAX;
+        published_playback_ordinal_ = UINT32_MAX;
         cycle_variation_telemetry_published_ = false;
         clearCycleMaskCache_();
         last_enabled_mask_ = state_.enabledMask;
@@ -311,18 +403,26 @@ void StepSequencerEngine::update(uint32_t tick, bool playing) {
             publishCycleMask_(0, len);
         }
         primeSchedule_();
+        forceTelemetry = true;
     }
 
-    advanceToTick_(tick);
+    uint32_t targetHorizon = emissionHorizonTick;
+    if (!requireExplicitResync && emission_horizon_valid_ &&
+        targetHorizon < emission_horizon_tick_) {
+        targetHorizon = emission_horizon_tick_;
+    }
+
+    advanceEmissionToTick_(targetHorizon);
+    publishTelemetryAtTick_(tick, forceTelemetry);
     last_tick_ = tick;
+    return true;
 }
 
-void StepSequencerEngine::advanceToTick_(uint32_t tick) {
+void StepSequencerEngine::advanceEmissionToTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     if (len == 0) {
-        state_.playheadStep = -1;
-        state_.playheadStepTickOffset = 0;
-        state_.playheadStepTicks = ticksPerStep_();
+        emission_horizon_tick_ = tick;
+        emission_horizon_valid_ = true;
         return;
     }
 
@@ -331,24 +431,69 @@ void StepSequencerEngine::advanceToTick_(uint32_t tick) {
     while (next_step_tick_ <= tick) {
         processDueEvents_(next_step_tick_);
 
-        const uint32_t stepNumber = next_step_tick_ / ticksPerStep;
-        const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
-        const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
+        StepSequencerPlaybackTickPosition tickPosition{};
+        if (!resolvePlaybackTick_(next_step_tick_, ticksPerStep, tickPosition)) {
+            break;
+        }
+        const auto& position = tickPosition.playback;
 
-        publishCycleMask_(cycleIndex, len);
-        publishPlayheadTickPosition_(next_step_tick_, ticksPerStep, len);
-        publishResolvedVariation_(stepIndex, cycleIndex, shouldTriggerStep_(stepIndex, stepNumber, len));
-
-        while (next_scheduled_step_number_ < stepNumber + 3U) {
-            scheduleStep_(next_scheduled_step_number_, ticksPerStep);
-            ++next_scheduled_step_number_;
+        while (next_scheduled_playback_ordinal_ < position.ordinal + 3U) {
+            scheduleStep_(next_scheduled_playback_ordinal_, ticksPerStep);
+            ++next_scheduled_playback_ordinal_;
         }
 
         next_step_tick_ += ticksPerStep;
     }
 
     processDueEvents_(tick);
-    publishPlayheadTickPosition_(tick, ticksPerStep, len);
+    emission_horizon_tick_ = tick;
+    emission_horizon_valid_ = true;
+}
+
+void StepSequencerEngine::publishTelemetryAtTick_(uint32_t tick, bool force) {
+    const uint8_t len = patternLength_();
+    const uint8_t ticksPerStep = ticksPerStep_();
+    StepSequencerPlaybackTickPosition tickPosition{};
+    if (len == 0 || !resolvePlaybackTick_(tick, ticksPerStep, tickPosition)) {
+        state_.playheadStep = -1;
+        state_.playheadStepTickOffset = 0;
+        state_.playheadStepTicks = ticksPerStep;
+        published_playback_ordinal_ = UINT32_MAX;
+        return;
+    }
+
+    const auto& position = tickPosition.playback;
+    publishPlayheadPosition_(tickPosition);
+
+    if (!force && published_playback_ordinal_ == position.ordinal) {
+        return;
+    }
+
+    if (published_playback_ordinal_ != UINT32_MAX &&
+        published_playback_ordinal_ < position.ordinal) {
+        uint32_t ordinal = published_playback_ordinal_ + 1U;
+        while (true) {
+            StepSequencerPlaybackPosition intermediate{};
+            if (!resolvePlaybackOrdinal_(ordinal, intermediate)) {
+                break;
+            }
+            publishCycleMask_(intermediate.loopCycleIndex, len);
+            publishResolvedVariation_(intermediate.stepIndex,
+                                      intermediate.loopCycleIndex,
+                                      shouldTriggerStep_(intermediate, len));
+            published_playback_ordinal_ = ordinal;
+            if (ordinal == position.ordinal) {
+                return;
+            }
+            ++ordinal;
+        }
+    }
+
+    publishCycleMask_(position.loopCycleIndex, len);
+    publishResolvedVariation_(position.stepIndex,
+                              position.loopCycleIndex,
+                              shouldTriggerStep_(position, len));
+    published_playback_ordinal_ = position.ordinal;
 }
 
 void StepSequencerEngine::primeSchedule_() {
@@ -356,21 +501,26 @@ void StepSequencerEngine::primeSchedule_() {
     if (len == 0) return;
 
     const uint8_t ticksPerStep = ticksPerStep_();
-    rememberTimingContext_(ticksPerStep, len);
+    rememberTimingContext_(ticksPerStep);
     scheduleStep_(0, ticksPerStep);
     scheduleStep_(1, ticksPerStep);
-    next_scheduled_step_number_ = 2;
+    next_scheduled_playback_ordinal_ = 2;
 }
 
-void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerStep) {
+void StepSequencerEngine::scheduleStep_(uint32_t playbackOrdinal, uint8_t ticksPerStep) {
     const uint8_t len = patternLength_();
     if (len == 0) return;
 
-    const uint8_t stepIndex = static_cast<uint8_t>(stepNumber % len);
-    if (stepIndex >= StepSequencerRuntimeState::MAX_STEPS) return;
+    StepSequencerPlaybackPosition position{};
+    if (!resolvePlaybackOrdinal_(playbackOrdinal, position) ||
+        position.stepIndex >= StepSequencerRuntimeState::MAX_STEPS) {
+        return;
+    }
 
-    const uint32_t cycleIndex = stepNumber / static_cast<uint32_t>(len);
-    const uint32_t stepStartTick = timedStepStartTick_(stepNumber, stepIndex, ticksPerStep);
+    const uint8_t stepIndex = position.stepIndex;
+    const uint32_t cycleIndex = position.loopCycleIndex;
+    const uint32_t stepStartTick =
+        timedStepStartTick_(playbackOrdinal, stepIndex, ticksPerStep);
 
     if (graph_ != nullptr && graph_->enabled &&
         graph_->sequence(graph_->rootSequenceId) != nullptr) {
@@ -389,7 +539,7 @@ void StepSequencerEngine::scheduleStep_(uint32_t stepNumber, uint8_t ticksPerSte
         return;
     }
 
-    if (!shouldTriggerStep_(stepIndex, stepNumber, len)) return;
+    if (!shouldTriggerStep_(position, len)) return;
 
     const auto variation = resolveVariation_(stepIndex, cycleIndex, true);
 
@@ -523,20 +673,23 @@ void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
 }
 
 void StepSequencerEngine::publishPlayheadTickPosition_(uint32_t tick,
-                                                       uint8_t ticksPerStep,
-                                                       uint8_t len) {
-    if (len == 0 || ticksPerStep == 0) {
+                                                       uint8_t ticksPerStep) {
+    StepSequencerPlaybackTickPosition position{};
+    if (!resolvePlaybackTick_(tick, ticksPerStep, position)) {
         state_.playheadStep = -1;
         state_.playheadStepTickOffset = 0;
         state_.playheadStepTicks = ticksPerStep == 0 ? 1 : ticksPerStep;
         return;
     }
 
-    const uint32_t stepNumber = tick / ticksPerStep;
-    state_.playheadStep = static_cast<int16_t>(stepNumber % len);
-    state_.playheadStepTickOffset =
-        static_cast<uint16_t>(tick - (stepNumber * static_cast<uint32_t>(ticksPerStep)));
-    state_.playheadStepTicks = ticksPerStep;
+    publishPlayheadPosition_(position);
+}
+
+void StepSequencerEngine::publishPlayheadPosition_(
+    const StepSequencerPlaybackTickPosition& position) {
+    state_.playheadStep = position.playback.stepIndex;
+    state_.playheadStepTickOffset = position.tickOffset;
+    state_.playheadStepTicks = position.ticksPerStep;
 }
 
 void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
@@ -582,19 +735,19 @@ void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
     state_.variationTelemetryRevision += 1U;
 }
 
-bool StepSequencerEngine::timingContextChanged_(uint8_t ticksPerStep, uint8_t len) const {
+bool StepSequencerEngine::timingContextChanged_(uint8_t ticksPerStep) const {
     if (!timing_context_valid_) return false;
     return last_ticks_per_step_ != ticksPerStep ||
-           last_pattern_length_ != len ||
            last_effective_swing_percent_ != state_.effectiveSwingPercent ||
-           last_pattern_nudge_percent_ != state_.patternNudgePercent;
+           last_pattern_nudge_percent_ != state_.patternNudgePercent ||
+           !samePlaybackRegion_(last_playback_region_, activePlaybackRegion_());
 }
 
-void StepSequencerEngine::rememberTimingContext_(uint8_t ticksPerStep, uint8_t len) {
+void StepSequencerEngine::rememberTimingContext_(uint8_t ticksPerStep) {
     last_ticks_per_step_ = ticksPerStep;
-    last_pattern_length_ = len;
     last_effective_swing_percent_ = state_.effectiveSwingPercent;
     last_pattern_nudge_percent_ = state_.patternNudgePercent;
+    last_playback_region_ = activePlaybackRegion_();
     timing_context_valid_ = true;
 }
 
