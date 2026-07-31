@@ -48,28 +48,40 @@ enum StepSequencerStepNodeFlags : uint16_t {
     STEP_NODE_CYCLE_SET = 1U << 8,
     STEP_NODE_CHORD_MODE = 1U << 9,
     STEP_NODE_CHORD_LOCAL = 1U << 10,
-    // Absence preserves the legacy destination-scale behavior. This explicit
-    // per-node opt-out lets one graph mix chromatic and scale-relative content.
-    STEP_NODE_PITCH_CHROMATIC = 1U << 11,
 };
+
+inline constexpr uint16_t STEP_NODE_ALL_FLAGS =
+    STEP_NODE_ENABLED_OVERRIDE |
+    STEP_NODE_ENABLED_VALUE |
+    STEP_NODE_NOTE_OFFSET |
+    STEP_NODE_VELOCITY_OFFSET |
+    STEP_NODE_GATE_OFFSET |
+    STEP_NODE_NUDGE_OFFSET |
+    STEP_NODE_PROBABILITY_OFFSET |
+    STEP_NODE_CHILD_SEQUENCE |
+    STEP_NODE_CYCLE_SET |
+    STEP_NODE_CHORD_MODE |
+    STEP_NODE_CHORD_LOCAL;
 
 struct StepSequencerStepNode {
     uint16_t flags = 0;
-    int8_t noteOffset = 0;
     int16_t velocityOffset = 0;
     int16_t gateOffset = 0;
-    int8_t nudgeOffset = 0;
     int16_t probabilityOffset = 0;
-    StepSequencerVariationRanges localVariation{};
-    StepSequencerChordMode chordMode = StepSequencerChordMode::Single;
-    StepSequencerChordSpec chordSpec{};
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
+    StepSequencerVariationRanges localVariation{};
+    StepSequencerChordSpec chordSpec{};
+    StepSequencerChordMode chordMode = StepSequencerChordMode::Single;
+    int8_t noteOffset = 0;
+    int8_t nudgeOffset = 0;
 
     bool has(uint16_t flag) const {
         return (flags & flag) != 0;
     }
 };
+
+static_assert(sizeof(StepSequencerStepNode) == 28, "Step nodes must not grow");
 
 struct StepSequencerGraph {
     bool enabled;
@@ -112,5 +124,7 @@ struct StepSequencerGraph {
         return &set;
     }
 };
+
+static_assert(sizeof(StepSequencerGraph) == 14792, "Sequencer graph footprint changed");
 
 }  // namespace oc::note::sequencer

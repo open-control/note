@@ -172,7 +172,7 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     uint8_t stepIndex,
     bool triggered = true,
     uint32_t stepIdentity = UINT32_MAX,
-    bool pitchUsesScaleDegrees = true
+    bool pitchFollowsScale = true
 ) {
     ranges.clamp();
     scaleSettings.clamp();
@@ -196,7 +196,7 @@ inline StepSequencerResolvedVariation resolveStepVariation(
     }
 
     result.pitchVariationUsesScaleDegrees =
-        pitchUsesScaleDegrees && scaleSettings.isConstrained();
+        pitchFollowsScale && scaleSettings.isConstrained();
     result.pitchDelta = static_cast<int8_t>(
         centeredDelta(runSeed, cycleIndex, stepIdentity, ranges.pitchSemitones, 0x50495443u)
     );
