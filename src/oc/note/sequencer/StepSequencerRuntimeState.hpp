@@ -18,6 +18,9 @@ struct StepSequencerExpandedVariationTelemetry {
     uint8_t rootStepIndex = 0;
     uint32_t cycleIndex = 0;
     uint8_t count = 0;
+    uint8_t requestedNoteCount = 0;
+    bool noteBudgetExceeded = false;
+    bool depthLimitReached = false;
     std::array<uint16_t, MAX_NOTES> nodeId{};
     std::array<uint32_t, MAX_NOTES> localTick{};
     std::array<uint16_t, MAX_NOTES> spanTicks{};
@@ -33,6 +36,9 @@ struct StepSequencerExpandedVariationTelemetry {
         rootStepIndex = 0;
         cycleIndex = 0;
         count = 0;
+        requestedNoteCount = 0;
+        noteBudgetExceeded = false;
+        depthLimitReached = false;
         nodeId.fill(INVALID_NODE_ID);
         localTick.fill(0);
         spanTicks.fill(1);
@@ -67,6 +73,24 @@ struct StepSequencerExpandedVariationTelemetry {
         if (count <= index) {
             count = static_cast<uint8_t>(index + 1U);
         }
+    }
+};
+
+struct StepSequencerRuntimeDiagnostics {
+    bool noteBudgetExceeded = false;
+    bool schedulerCapacityExceeded = false;
+    bool depthLimitReached = false;
+    uint32_t noteBudgetExceededCount = 0;
+    uint32_t schedulerCapacityExceededCount = 0;
+    uint32_t depthLimitReachedCount = 0;
+
+    void reset() {
+        noteBudgetExceeded = false;
+        schedulerCapacityExceeded = false;
+        depthLimitReached = false;
+        noteBudgetExceededCount = 0;
+        schedulerCapacityExceededCount = 0;
+        depthLimitReachedCount = 0;
     }
 };
 
@@ -106,12 +130,17 @@ struct StepSequencerRuntimeState {
     std::array<uint8_t, MAX_STEPS> probability{};
 
     StepSequencerScaleSettings scaleSettings{};
+    // One Pattern-level authority for Note offsets, pitch variation and Chord
+    // intervals. The effective unit is degrees only when the scale is
+    // constrained; Free and Chromatic scales still resolve in semitones.
+    bool pitchFollowsScale = true;
     StepSequencerVariationRanges variationRanges{};
     bool variationTelemetryEnabled = true;
     uint32_t variationTelemetryRevision = 0;
     StepSequencerResolvedVariation lastResolvedVariation{};
     StepSequencerCycleVariationTelemetry cycleVariationTelemetry{};
     StepSequencerExpandedVariationTelemetry expandedVariationTelemetry{};
+    StepSequencerRuntimeDiagnostics runtimeDiagnostics{};
 
     StepSequencerRuntimeState() { reset(); }
 
@@ -145,10 +174,12 @@ struct StepSequencerRuntimeState {
         variationTelemetryRevision = 0;
         variationTelemetryEnabled = true;
         scaleSettings = {};
+        pitchFollowsScale = true;
         variationRanges = {};
         lastResolvedVariation = {};
         cycleVariationTelemetry.reset();
         expandedVariationTelemetry.reset();
+        runtimeDiagnostics.reset();
 
         for (uint8_t i = 0; i < MAX_STEPS; ++i) {
             note[i] = DEFAULT_NOTE;

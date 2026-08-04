@@ -36,9 +36,9 @@ public:
      * `resyncToTick(tick)` before this method can advance again. Rejected calls
      * have no observable effect.
      *
-     * `update(tick, playing)` retains its legacy behaviour and is equivalent to
-     * advancing with no future emission horizon for clients that do not mix the
-     * two APIs.
+     * `update(tick, playing)` is the single-tick convenience API and is
+     * equivalent to advancing with no future emission horizon. Clients must
+     * not mix the two APIs within one playback session.
      */
     [[nodiscard]] bool updateWithEmissionHorizon(uint32_t tick,
                                                  uint32_t emissionHorizonTick,
@@ -52,7 +52,7 @@ public:
      */
     [[nodiscard]] bool setPlaybackRegion(const StepSequencerPlaybackRegion& region);
 
-    /** Return to the legacy full [0, state.length) region. */
+    /** Return to the default full [0, state.length) region. */
     void useStateLengthPlaybackRegion();
 
     /** Return the exact region currently consumed by the engine. */

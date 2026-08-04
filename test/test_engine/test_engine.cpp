@@ -385,7 +385,7 @@ void test_playhead_tick_position_tracks_offset_inside_current_step() {
     TEST_ASSERT_EQUAL_UINT16(0, st.playheadStepTickOffset);
 }
 
-void test_engine_default_region_tracks_legacy_state_length() {
+void test_engine_default_region_tracks_state_length() {
     StepSequencerRuntimeState st;
     st.length = 4;
 
@@ -1292,6 +1292,49 @@ void test_graph_expanded_variation_telemetry_tracks_chord_voices() {
     TEST_ASSERT_FALSE(st.expandedVariationTelemetry.chordIntervalUsesScaleDegrees[0]);
 }
 
+void test_graph_note_budget_publishes_telemetry_and_runtime_diagnostics() {
+    StepSequencerRuntimeState st;
+    st.length = 4;
+    st.stepsPerBeat = 4;
+    st.enabledMask = StepBitMask128::fromLower64(1ULL);
+    st.note[0] = 60;
+    st.velocity[0] = 96;
+    st.gate[0] = 100;
+    st.probability[0] = 100;
+
+    StepSequencerGraph graph;
+    graph.enabled = true;
+    graph.rootSequenceId = 0;
+    graph.sequenceCount = 2;
+    graph.stepNodeCount = 21;
+    graph.sequences[0].kind = StepSequencerSequenceKind::RootPattern;
+    graph.sequences[0].firstStepNode = 0;
+    graph.sequences[0].length = 4;
+    graph.sequences[1].kind = StepSequencerSequenceKind::MicroSequence;
+    graph.sequences[1].firstStepNode = 4;
+    graph.sequences[1].length = 17;
+    graph.stepNodes[0].flags = STEP_NODE_CHILD_SEQUENCE;
+    graph.stepNodes[0].childSequenceId = 1;
+
+    MockEventSink sink;
+    StepSequencerEngine eng(st, sink);
+    eng.setGraph(&graph);
+    eng.update(0, true);
+
+    TEST_ASSERT_TRUE(st.expandedVariationTelemetry.valid);
+    TEST_ASSERT_TRUE(st.expandedVariationTelemetry.noteBudgetExceeded);
+    TEST_ASSERT_EQUAL_UINT8(16, st.expandedVariationTelemetry.count);
+    TEST_ASSERT_EQUAL_UINT8(17, st.expandedVariationTelemetry.requestedNoteCount);
+    TEST_ASSERT_TRUE(st.runtimeDiagnostics.noteBudgetExceeded);
+    TEST_ASSERT_EQUAL_UINT32(1, st.runtimeDiagnostics.noteBudgetExceededCount);
+    TEST_ASSERT_FALSE(st.runtimeDiagnostics.schedulerCapacityExceeded);
+    TEST_ASSERT_EQUAL_UINT32(0, st.runtimeDiagnostics.schedulerCapacityExceededCount);
+
+    eng.reset();
+    TEST_ASSERT_FALSE(st.runtimeDiagnostics.noteBudgetExceeded);
+    TEST_ASSERT_EQUAL_UINT32(0, st.runtimeDiagnostics.noteBudgetExceededCount);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_note_scheduler_tracks_same_pitch_by_channel);
@@ -1304,7 +1347,7 @@ int main() {
     RUN_TEST(test_different_pitch_overlap_keeps_original_note_off);
     RUN_TEST(test_boundary_order_note_off_before_next_step);
     RUN_TEST(test_playhead_tick_position_tracks_offset_inside_current_step);
-    RUN_TEST(test_engine_default_region_tracks_legacy_state_length);
+    RUN_TEST(test_engine_default_region_tracks_state_length);
     RUN_TEST(test_engine_rejects_invalid_region_without_changing_active_region);
     RUN_TEST(test_engine_plays_prelude_once_then_repeats_internal_loop);
     RUN_TEST(test_engine_resync_uses_same_region_for_playhead_probability_and_next_note);
@@ -1328,5 +1371,6 @@ int main() {
     RUN_TEST(test_graph_root_chord_strum_schedules_staggered_voices);
     RUN_TEST(test_graph_expanded_variation_telemetry_tracks_nested_micro_node);
     RUN_TEST(test_graph_expanded_variation_telemetry_tracks_chord_voices);
+    RUN_TEST(test_graph_note_budget_publishes_telemetry_and_runtime_diagnostics);
     return UNITY_END();
 }

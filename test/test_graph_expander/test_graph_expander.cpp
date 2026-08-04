@@ -12,7 +12,6 @@ using oc::note::sequencer::STEP_NODE_ENABLED_OVERRIDE;
 using oc::note::sequencer::STEP_NODE_ENABLED_VALUE;
 using oc::note::sequencer::STEP_NODE_GATE_OFFSET;
 using oc::note::sequencer::STEP_NODE_NOTE_OFFSET;
-using oc::note::sequencer::STEP_NODE_PITCH_CHROMATIC;
 using oc::note::sequencer::STEP_NODE_NUDGE_OFFSET;
 using oc::note::sequencer::STEP_NODE_PROBABILITY_OFFSET;
 using oc::note::sequencer::STEP_NODE_VELOCITY_OFFSET;
@@ -444,8 +443,9 @@ void test_micro_sequence_child_local_chord_overrides_parent_chord() {
     attachSequence(graph, 0, 1, 4, 1);
     graph.stepNodes[4].flags = STEP_NODE_NOTE_OFFSET;
     graph.stepNodes[4].noteOffset = 2;
-    StepSequencerChordSpec minor{};
-    minor.setLegacyRecipe({.color = 1});
+    const auto minor = StepSequencerChordSpec::semantic(
+        StepSequencerChordHarmony::Minor
+    );
     setLocalChord(graph, 4, minor);
 
     const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 6, 1, true);
@@ -749,9 +749,41 @@ void test_note_budget_is_bounded() {
     );
 
     const auto out = StepSequencerExpander::expandRootStep(state, graph, 0, 0, 17, 1, true);
+    const auto analysis =
+        StepSequencerExpander::analyzeRootStep(state, graph, 0, 0, 17, 1, true);
 
     TEST_ASSERT_TRUE(out.noteBudgetExceeded);
     TEST_ASSERT_EQUAL_UINT8(StepSequencerGraphLimits::MAX_EXPANDED_NOTES_PER_ROOT_STEP, out.count);
+    TEST_ASSERT_EQUAL_UINT8(17, out.requestedNoteCount);
+    TEST_ASSERT_TRUE(analysis.noteBudgetExceeded);
+    TEST_ASSERT_EQUAL_UINT8(out.count, analysis.emittedNoteCount);
+    TEST_ASSERT_EQUAL_UINT8(out.requestedNoteCount, analysis.requestedNoteCount);
+    TEST_ASSERT_EQUAL_UINT8(
+        out.notes[StepSequencerGraphLimits::MAX_EXPANDED_NOTES_PER_ROOT_STEP - 1U]
+            .variation.resolved.note,
+        60
+    );
+}
+
+void test_note_budget_analysis_matches_exact_8_and_16_note_expansions() {
+    auto state = baseState();
+
+    for (const uint8_t voiceCount : {static_cast<uint8_t>(8), static_cast<uint8_t>(16)}) {
+        auto graph = graphWithRoot();
+        attachSequence(graph, 0, 1, 4, voiceCount);
+
+        const auto out =
+            StepSequencerExpander::expandRootStep(state, graph, 0, 0, voiceCount, 17, true);
+        const auto analysis =
+            StepSequencerExpander::analyzeRootStep(state, graph, 0, 0, voiceCount, 17, true);
+
+        TEST_ASSERT_FALSE(out.noteBudgetExceeded);
+        TEST_ASSERT_FALSE(analysis.noteBudgetExceeded);
+        TEST_ASSERT_EQUAL_UINT8(voiceCount, out.count);
+        TEST_ASSERT_EQUAL_UINT8(voiceCount, out.requestedNoteCount);
+        TEST_ASSERT_EQUAL_UINT8(out.count, analysis.emittedNoteCount);
+        TEST_ASSERT_EQUAL_UINT8(out.requestedNoteCount, analysis.requestedNoteCount);
+    }
 }
 
 void test_scale_and_variation_apply_after_expansion() {
@@ -998,7 +1030,7 @@ void test_micro_sequence_steps_use_distinct_variation_identity() {
     TEST_ASSERT_EQUAL_INT8(secondExpected.pitchDelta, out.notes[1].variation.pitchDelta);
 }
 
-void test_per_node_pitch_policy_keeps_chromatic_offset_and_adapts_relative_offset() {
+void test_pattern_pitch_context_controls_note_offsets() {
     auto state = baseState();
     state.scaleSettings = {
         .root = 0,
@@ -1006,25 +1038,24 @@ void test_per_node_pitch_policy_keeps_chromatic_offset_and_adapts_relative_offse
         .mode = StepSequencerScaleConstraintMode::ConstrainNearest,
     };
 
-    auto relativeGraph = graphWithRoot();
-    relativeGraph.stepNodes[0].flags |= STEP_NODE_NOTE_OFFSET;
-    relativeGraph.stepNodes[0].noteOffset = 1;
+    auto graph = graphWithRoot();
+    graph.stepNodes[0].flags |= STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[0].noteOffset = 1;
     const auto relative = StepSequencerExpander::expandRootStep(
-        state, relativeGraph, 0, 0, 8, 1, true
+        state, graph, 0, 0, 8, 1, true
     );
     TEST_ASSERT_EQUAL_UINT8(1, relative.count);
     TEST_ASSERT_EQUAL_UINT8(62, relative.notes[0].variation.resolved.note);  // C -> D
 
-    auto chromaticGraph = relativeGraph;
-    chromaticGraph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
+    state.pitchFollowsScale = false;
     const auto chromatic = StepSequencerExpander::expandRootStep(
-        state, chromaticGraph, 0, 0, 8, 1, true
+        state, graph, 0, 0, 8, 1, true
     );
     TEST_ASSERT_EQUAL_UINT8(1, chromatic.count);
     TEST_ASSERT_EQUAL_UINT8(61, chromatic.notes[0].variation.resolved.note);  // C -> C#
 }
 
-void test_per_node_pitch_policy_controls_local_variation_and_chord_intervals() {
+void test_pattern_pitch_context_controls_local_variation_and_chord_intervals() {
     auto state = baseState();
     state.scaleSettings = {
         .root = 0,
@@ -1048,21 +1079,20 @@ void test_per_node_pitch_policy_controls_local_variation_and_chord_intervals() {
     }
     TEST_ASSERT_TRUE(seed < 1000);
 
-    auto relativeGraph = graphWithRoot();
-    relativeGraph.stepNodes[0].localVariation.pitchSemitones = 1;
-    setLocalChord(relativeGraph, 0, StepSequencerChordSpec{.voiceCount = 3});
+    auto graph = graphWithRoot();
+    graph.stepNodes[0].localVariation.pitchSemitones = 1;
+    setLocalChord(graph, 0, StepSequencerChordSpec{.voiceCount = 3});
     const auto relative = StepSequencerExpander::expandRootStep(
-        state, relativeGraph, 0, 0, 8, seed, true
+        state, graph, 0, 0, 8, seed, true
     );
     TEST_ASSERT_TRUE(relative.count >= 1);
     TEST_ASSERT_EQUAL_UINT8(62, relative.notes[0].variation.resolved.note);
     TEST_ASSERT_TRUE(relative.notes[0].variation.pitchVariationUsesScaleDegrees);
     TEST_ASSERT_TRUE(relative.notes[0].chordIntervalUsesScaleDegrees);
 
-    auto chromaticGraph = relativeGraph;
-    chromaticGraph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
+    state.pitchFollowsScale = false;
     const auto chromatic = StepSequencerExpander::expandRootStep(
-        state, chromaticGraph, 0, 0, 8, seed, true
+        state, graph, 0, 0, 8, seed, true
     );
     TEST_ASSERT_TRUE(chromatic.count >= 1);
     TEST_ASSERT_EQUAL_UINT8(61, chromatic.notes[0].variation.resolved.note);
@@ -1070,7 +1100,7 @@ void test_per_node_pitch_policy_controls_local_variation_and_chord_intervals() {
     TEST_ASSERT_FALSE(chromatic.notes[0].chordIntervalUsesScaleDegrees);
 }
 
-void test_global_scale_relative_and_local_chromatic_variation_coexist() {
+void test_chromatic_pitch_context_controls_global_and_local_variation() {
     auto state = baseState();
     state.note[0] = 60;
     state.scaleSettings = {
@@ -1098,18 +1128,19 @@ void test_global_scale_relative_and_local_chromatic_variation_coexist() {
     TEST_ASSERT_TRUE(seed < 1000);
 
     auto graph = graphWithRoot();
-    graph.stepNodes[0].flags |= STEP_NODE_PITCH_CHROMATIC;
     graph.stepNodes[0].localVariation.pitchSemitones = 1;
+    state.pitchFollowsScale = false;
 
     const auto out = StepSequencerExpander::expandRootStep(
         state, graph, 0, 0, 8, seed, true
     );
 
     TEST_ASSERT_EQUAL_UINT8(1, out.count);
-    // Global destination variation moves C one C-major degree to D; the
-    // imported local chromatic layer then moves D one semitone to D#.
-    TEST_ASSERT_EQUAL_UINT8(63, out.notes[0].variation.resolved.note);
+    // The root policy is authoritative for the whole expansion: global and
+    // local pitch variation both resolve chromatically (C + 1 + 1 = D).
+    TEST_ASSERT_EQUAL_UINT8(62, out.notes[0].variation.resolved.note);
     TEST_ASSERT_FALSE(out.notes[0].variation.pitchVariationUsesScaleDegrees);
+    TEST_ASSERT_FALSE(out.notes[0].chordIntervalUsesScaleDegrees);
     TEST_ASSERT_EQUAL_UINT8(2, out.notes[0].variation.ranges.pitchSemitones);
 }
 
@@ -1146,14 +1177,15 @@ int main() {
     RUN_TEST(test_same_level_default_micro_sequence_keeps_parent_cycle_index);
     RUN_TEST(test_depth_limit_stops_before_unbounded_nesting);
     RUN_TEST(test_note_budget_is_bounded);
+    RUN_TEST(test_note_budget_analysis_matches_exact_8_and_16_note_expansions);
     RUN_TEST(test_scale_and_variation_apply_after_expansion);
     RUN_TEST(test_local_variation_combines_with_global_ranges);
     RUN_TEST(test_parent_local_variation_inherits_into_micro_child_base);
     RUN_TEST(test_parent_local_variation_inherits_into_cycle_state_base);
     RUN_TEST(test_cycle_state_local_variation_sets_micro_sequence_pitch_origin);
     RUN_TEST(test_micro_sequence_steps_use_distinct_variation_identity);
-    RUN_TEST(test_per_node_pitch_policy_keeps_chromatic_offset_and_adapts_relative_offset);
-    RUN_TEST(test_per_node_pitch_policy_controls_local_variation_and_chord_intervals);
-    RUN_TEST(test_global_scale_relative_and_local_chromatic_variation_coexist);
+    RUN_TEST(test_pattern_pitch_context_controls_note_offsets);
+    RUN_TEST(test_pattern_pitch_context_controls_local_variation_and_chord_intervals);
+    RUN_TEST(test_chromatic_pitch_context_controls_global_and_local_variation);
     return UNITY_END();
 }

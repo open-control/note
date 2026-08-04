@@ -2,9 +2,21 @@
 
 #include <algorithm>
 
+#include <config/PlatformCompat.hpp>
+
 #include "StepSequencerExpander.hpp"
 
 namespace oc::note::sequencer {
+
+namespace {
+
+void incrementSaturating(uint32_t& counter) {
+    if (counter < UINT32_MAX) {
+        ++counter;
+    }
+}
+
+}  // namespace
 
 void StepSequencerEngine::clearCycleMaskCache_() {
     cached_cycle_indices_.fill(UINT32_MAX);
@@ -12,7 +24,7 @@ void StepSequencerEngine::clearCycleMaskCache_() {
     next_cycle_cache_slot_ = 0;
 }
 
-void StepSequencerEngine::reset() {
+FLASHMEM void StepSequencerEngine::reset() {
     stop_();
     scheduler_.clear();
     last_tick_ = 0;
@@ -34,6 +46,7 @@ void StepSequencerEngine::reset() {
     state_.lastResolvedVariation = {};
     state_.cycleVariationTelemetry.reset();
     state_.expandedVariationTelemetry.reset();
+    state_.runtimeDiagnostics.reset();
     state_.variationTelemetryRevision += 1U;
 }
 
@@ -54,7 +67,7 @@ StepSequencerPlaybackRegion StepSequencerEngine::playbackRegion() const {
     return activePlaybackRegion_();
 }
 
-void StepSequencerEngine::resyncToTick(uint32_t tick) {
+FLASHMEM void StepSequencerEngine::resyncToTick(uint32_t tick) {
     scheduler_.clear();
     emitAllNotesOff_(tick);
     playing_ = true;
@@ -209,7 +222,7 @@ bool StepSequencerEngine::shouldTriggerStep_(const StepSequencerPlaybackPosition
     return maskForCycle_(position.loopCycleIndex, len).test(position.stepIndex);
 }
 
-void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
+FLASHMEM void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
     if (published_cycle_index_ == cycleIndex) {
         if (state_.variationTelemetryEnabled && !cycle_variation_telemetry_published_) {
             publishCycleVariationTelemetry_(cycleIndex, len, state_.probabilityCycleMask);
@@ -229,7 +242,7 @@ void StepSequencerEngine::publishCycleMask_(uint32_t cycleIndex, uint8_t len) {
     }
 }
 
-void StepSequencerEngine::start_() {
+FLASHMEM void StepSequencerEngine::start_() {
     playing_ = true;
     scheduler_.clear();
     next_step_tick_ = 0;
@@ -252,7 +265,7 @@ void StepSequencerEngine::start_() {
     primeSchedule_();
 }
 
-void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
+FLASHMEM void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
     const uint8_t len = patternLength_();
     const uint8_t ticksPerStep = ticksPerStep_();
     rememberTimingContext_(ticksPerStep);
@@ -304,7 +317,7 @@ void StepSequencerEngine::prepareFromTick_(uint32_t tick) {
     }
 }
 
-void StepSequencerEngine::stop_() {
+FLASHMEM void StepSequencerEngine::stop_() {
     if (!playing_) return;
     playing_ = false;
     scheduler_.clear();
@@ -496,7 +509,7 @@ void StepSequencerEngine::publishTelemetryAtTick_(uint32_t tick, bool force) {
     published_playback_ordinal_ = position.ordinal;
 }
 
-void StepSequencerEngine::primeSchedule_() {
+FLASHMEM void StepSequencerEngine::primeSchedule_() {
     const uint8_t len = patternLength_();
     if (len == 0) return;
 
@@ -533,6 +546,14 @@ void StepSequencerEngine::scheduleStep_(uint32_t playbackOrdinal, uint8_t ticksP
             run_seed_,
             true
         );
+        if (expansion.noteBudgetExceeded) {
+            state_.runtimeDiagnostics.noteBudgetExceeded = true;
+            incrementSaturating(state_.runtimeDiagnostics.noteBudgetExceededCount);
+        }
+        if (expansion.depthLimitReached) {
+            state_.runtimeDiagnostics.depthLimitReached = true;
+            incrementSaturating(state_.runtimeDiagnostics.depthLimitReachedCount);
+        }
         for (uint8_t i = 0; i < expansion.count; ++i) {
             scheduleExpandedNote_(stepStartTick, expansion.notes[i]);
         }
@@ -559,6 +580,8 @@ void StepSequencerEngine::scheduleStep_(uint32_t playbackOrdinal, uint8_t ticksP
 
     const uint32_t offTick = onTick + offTicks;
     if (!scheduler_.scheduleNote(onTick, offTick, ch, note, vel)) {
+        state_.runtimeDiagnostics.schedulerCapacityExceeded = true;
+        incrementSaturating(state_.runtimeDiagnostics.schedulerCapacityExceededCount);
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
@@ -585,6 +608,8 @@ void StepSequencerEngine::scheduleExpandedNote_(uint32_t stepStartTick,
 
     const uint32_t offTick = onTick + offTicks;
     if (!scheduler_.scheduleNote(onTick, offTick, ch, midiNote, vel)) {
+        state_.runtimeDiagnostics.schedulerCapacityExceeded = true;
+        incrementSaturating(state_.runtimeDiagnostics.schedulerCapacityExceededCount);
         emitAllNotesOff_(offTick);
         scheduler_.clear();
     }
@@ -614,9 +639,11 @@ StepSequencerResolvedVariation StepSequencerEngine::resolveVariation_(uint8_t st
     );
 }
 
-void StepSequencerEngine::publishExpandedVariationTelemetry_(uint8_t stepIndex,
-                                                            uint32_t cycleIndex,
-                                                            bool triggered) {
+FLASHMEM void StepSequencerEngine::publishExpandedVariationTelemetry_(
+    uint8_t stepIndex,
+    uint32_t cycleIndex,
+    bool triggered
+) {
     state_.expandedVariationTelemetry.reset();
     if (graph_ == nullptr ||
         !graph_->enabled ||
@@ -642,6 +669,9 @@ void StepSequencerEngine::publishExpandedVariationTelemetry_(uint8_t stepIndex,
         expansion.count,
         StepSequencerExpandedVariationTelemetry::MAX_NOTES
     );
+    telemetry.requestedNoteCount = expansion.requestedNoteCount;
+    telemetry.noteBudgetExceeded = expansion.noteBudgetExceeded;
+    telemetry.depthLimitReached = expansion.depthLimitReached;
     for (uint8_t i = 0; i < count; ++i) {
         telemetry.store(
             i,
@@ -658,9 +688,9 @@ void StepSequencerEngine::publishExpandedVariationTelemetry_(uint8_t stepIndex,
     }
 }
 
-void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
-                                                    uint32_t cycleIndex,
-                                                    bool triggered) {
+FLASHMEM void StepSequencerEngine::publishResolvedVariation_(uint8_t stepIndex,
+                                                             uint32_t cycleIndex,
+                                                             bool triggered) {
     publishExpandedVariationTelemetry_(stepIndex, cycleIndex, triggered);
     if (state_.expandedVariationTelemetry.valid) {
         state_.lastResolvedVariation = state_.expandedVariationTelemetry.count > 0
@@ -692,9 +722,11 @@ void StepSequencerEngine::publishPlayheadPosition_(
     state_.playheadStepTicks = position.ticksPerStep;
 }
 
-void StepSequencerEngine::publishCycleVariationTelemetry_(uint32_t cycleIndex,
-                                                         uint8_t len,
-                                                         const StepBitMask128& triggeredMask) {
+FLASHMEM void StepSequencerEngine::publishCycleVariationTelemetry_(
+    uint32_t cycleIndex,
+    uint8_t len,
+    const StepBitMask128& triggeredMask
+) {
     state_.cycleVariationTelemetry.reset();
     state_.cycleVariationTelemetry.cycleIndex = cycleIndex;
     state_.cycleVariationTelemetry.ranges = state_.variationRanges;
@@ -751,7 +783,7 @@ void StepSequencerEngine::rememberTimingContext_(uint8_t ticksPerStep) {
     timing_context_valid_ = true;
 }
 
-void StepSequencerEngine::resyncTimingContext_(uint32_t tick) {
+FLASHMEM void StepSequencerEngine::resyncTimingContext_(uint32_t tick) {
     scheduler_.clear();
     emitAllNotesOff_(tick);
     prepareFromTick_(tick);

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <config/PlatformCompat.hpp>
+
 namespace oc::note::sequencer {
 
 namespace {
@@ -17,7 +19,7 @@ struct ResolvedStep {
     // Destination-owned pattern variation is resolved before graph payload.
     // It is retained only so expanded telemetry can report the complete result.
     StepSequencerResolvedVariation patternVariation{};
-    bool pitchUsesScaleDegrees = true;
+    bool pitchFollowsScale = true;
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 };
@@ -38,10 +40,10 @@ uint8_t clampMidi7Offset(uint8_t base, int16_t offset) {
 uint8_t applyNoteOffset(uint8_t base,
                         int8_t offset,
                         StepSequencerScaleSettings scaleSettings,
-                        bool pitchUsesScaleDegrees) {
+                        bool pitchFollowsScale) {
     if (offset == 0) return base;
     scaleSettings.clamp();
-    if (pitchUsesScaleDegrees && scaleSettings.isConstrained()) {
+    if (pitchFollowsScale && scaleSettings.isConstrained()) {
         return moveByScaleDegrees(base, offset, scaleSettings);
     }
     return clampMidi7Offset(base, offset);
@@ -183,7 +185,6 @@ ResolvedStep applyNode(const ResolvedStep& parent,
                        StepSequencerScaleSettings scaleSettings) {
     ResolvedStep out = parent;
     out.nodeId = nodeId;
-    out.pitchUsesScaleDegrees = !node.has(STEP_NODE_PITCH_CHROMATIC);
 
     if (node.has(STEP_NODE_ENABLED_OVERRIDE)) {
         out.enabled = node.has(STEP_NODE_ENABLED_VALUE);
@@ -193,7 +194,7 @@ ResolvedStep applyNode(const ResolvedStep& parent,
             out.values.note,
             node.noteOffset,
             scaleSettings,
-            out.pitchUsesScaleDegrees
+            out.pitchFollowsScale
         );
     }
     if (node.has(STEP_NODE_VELOCITY_OFFSET)) {
@@ -236,7 +237,7 @@ StepSequencerInheritedChord activeChordForChildren(const ResolvedStep& step,
         step.chordState,
         step.inheritedChord,
         spanTicks,
-        step.pitchUsesScaleDegrees
+        step.pitchFollowsScale
     ).activeForChildren;
 }
 
@@ -263,7 +264,7 @@ ResolvedStep applyLocalVariationContext(const ResolvedStep& step,
         rootStepIndex,
         true,
         variationIdentity,
-        out.pitchUsesScaleDegrees
+        out.pitchFollowsScale
     );
     out.values = variation.resolved;
     out.localVariation = {};
@@ -359,11 +360,15 @@ bool appendExpandedVoice(StepSequencerExpansion& out,
                          int16_t chordInterval,
                          bool chordIntervalUsesScaleDegrees) {
     if (out.count >= out.notes.size()) {
+        out.requestedNoteCount = static_cast<uint8_t>(
+            StepSequencerGraphLimits::MAX_EXPANDED_NOTES_PER_ROOT_STEP + 1U
+        );
         out.noteBudgetExceeded = true;
         return false;
     }
 
     auto& note = out.notes[out.count++];
+    out.requestedNoteCount = out.count;
     note.nodeId = step.nodeId;
     note.localTick = localTick;
     note.spanTicks = std::max<uint16_t>(spanTicks, 1U);
@@ -399,7 +404,7 @@ bool appendNote(StepSequencerExpansion& out,
         rootStepIndex,
         triggered,
         variationIdentity,
-        step.pitchUsesScaleDegrees
+        step.pitchFollowsScale
     );
     const bool patternVariationAffectedValues =
         hasAnyVariationRange(step.patternVariation.ranges) ||
@@ -444,7 +449,7 @@ bool appendNote(StepSequencerExpansion& out,
         step.chordState,
         step.inheritedChord,
         std::max<uint16_t>(spanTicks, 1U),
-        step.pitchUsesScaleDegrees
+        step.pitchFollowsScale
     );
 
     for (uint8_t i = 0; i < chord.count; ++i) {
@@ -645,8 +650,12 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         return out;
     }
 
+    const uint16_t rootNodeId =
+        static_cast<uint16_t>(root->firstStepNode + sourceRootIndex);
+    const auto* rootNode = graph.stepNode(rootNodeId);
+
     ResolvedStep base{
-        .nodeId = static_cast<uint16_t>(root->firstStepNode + sourceRootIndex),
+        .nodeId = rootNodeId,
         .enabled = state.enabledMask.test(sourceRootIndex),
         .values = StepSequencerStepValues{
             .note = state.note[sourceRootIndex],
@@ -658,14 +667,14 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         .localVariation = {},
         .chordState = defaultRootChordState(),
         .inheritedChord = {},
+        .pitchFollowsScale = state.pitchFollowsScale,
         .childSequenceId = StepSequencerGraphLimits::INVALID_ID,
         .cycleSetId = StepSequencerGraphLimits::INVALID_ID,
     };
 
-    // Global/pattern variation belongs to the destination and is resolved
-    // before any imported node offset, local variation or chord semantics.
-    // This ordering lets scale-relative global variation coexist with a
-    // chromatic payload without either layer changing the other's meaning.
+    // Global variation is resolved before graph-local offsets, but it shares
+    // the same visible Pitch Context authority as Note, child offsets and
+    // Chord. A Chromatic Pattern therefore cannot still randomize in degrees.
     base.patternVariation = resolveStepVariation(
         base.values,
         state.variationRanges,
@@ -676,16 +685,15 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         rootStepIndex,
         triggered,
         sourceRootIndex,
-        true
+        base.pitchFollowsScale
     );
     base.values = base.patternVariation.resolved;
 
-    const auto* rootNode = graph.stepNode(static_cast<uint16_t>(root->firstStepNode + sourceRootIndex));
     if (rootNode != nullptr) {
         base = applyNode(
             base,
             *rootNode,
-            static_cast<uint16_t>(root->firstStepNode + sourceRootIndex),
+            rootNodeId,
             state.scaleSettings
         );
     }
@@ -706,6 +714,32 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         out
     );
     return out;
+}
+
+FLASHMEM StepSequencerExpansionAnalysis StepSequencerExpander::analyzeRootStep(
+    const StepSequencerRuntimeState& state,
+    const StepSequencerGraph& graph,
+    uint8_t rootStepIndex,
+    uint32_t cycleIndex,
+    uint8_t ticksPerStep,
+    uint32_t runSeed,
+    bool triggered
+) {
+    const auto expansion = expandRootStep(
+        state,
+        graph,
+        rootStepIndex,
+        cycleIndex,
+        ticksPerStep,
+        runSeed,
+        triggered
+    );
+    return StepSequencerExpansionAnalysis{
+        .emittedNoteCount = expansion.count,
+        .requestedNoteCount = expansion.requestedNoteCount,
+        .noteBudgetExceeded = expansion.noteBudgetExceeded,
+        .depthLimitReached = expansion.depthLimitReached,
+    };
 }
 
 }  // namespace oc::note::sequencer

@@ -73,7 +73,7 @@ void test_invalid_resolution_never_partially_mutates_output() {
     TEST_ASSERT_EQUAL_UINT64(456, tickOutput.nextStepTick);
 }
 
-void test_full_length_profile_matches_legacy_modulo_and_cycle_for_all_steps() {
+void test_full_length_profile_matches_default_modulo_and_cycle_for_all_steps() {
     for (uint8_t length = 1; length <= 128; ++length) {
         const auto region = StepSequencerPlaybackRegion::fullLength(length);
         for (uint32_t ordinal = 0; ordinal < 512; ++ordinal) {
@@ -212,7 +212,7 @@ int main() {
     RUN_TEST(test_default_and_full_length_regions_are_valid);
     RUN_TEST(test_invalid_regions_are_rejected_by_exact_invariants);
     RUN_TEST(test_invalid_resolution_never_partially_mutates_output);
-    RUN_TEST(test_full_length_profile_matches_legacy_modulo_and_cycle_for_all_steps);
+    RUN_TEST(test_full_length_profile_matches_default_modulo_and_cycle_for_all_steps);
     RUN_TEST(test_prelude_is_played_once_before_first_loop_and_later_cycles);
     RUN_TEST(test_loop_can_start_immediately_at_nonzero_content_step);
     RUN_TEST(test_tick_resolution_is_exact_inside_steps_and_at_loop_boundaries);
