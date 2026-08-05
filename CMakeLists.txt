@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.29)
 
-project(open_control_note LANGUAGES C CXX)
+project(open_control_note VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,8 +20,7 @@ if(NOT TARGET oc_framework_native)
         "${CMAKE_BINARY_DIR}/open-control-framework")
 endif()
 
-file(GLOB_RECURSE OC_NOTE_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenControlNoteSources.cmake")
 
 add_library(oc_note_native STATIC ${OC_NOTE_SOURCES})
 target_include_directories(oc_note_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
