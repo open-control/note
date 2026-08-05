@@ -12,6 +12,17 @@
   "platforms": "*",
   "build": {
     "includeDir": "src",
-    "srcFilter": ["+<**/*.cpp>", "-<main.cpp>"]
+    "srcFilter": [
+      "+<oc/note/clock/InternalClock.cpp>",
+      "+<oc/note/sequencer/StepSequencerChord.cpp>",
+      "+<oc/note/sequencer/StepSequencerChordPreset.cpp>",
+      "+<oc/note/sequencer/StepSequencerChordProjection.cpp>",
+      "+<oc/note/sequencer/StepSequencerChordSpec.cpp>",
+      "+<oc/note/sequencer/StepSequencerEngine.cpp>",
+      "+<oc/note/sequencer/StepSequencerExpander.cpp>",
+      "+<oc/note/sequencer/StepSequencerGraph.cpp>",
+      "+<oc/note/sequencer/StepSequencerPlaybackRegion.cpp>",
+      "+<oc/note/sequencer/StepSequencerState.cpp>"
+    ]
   }
 }
