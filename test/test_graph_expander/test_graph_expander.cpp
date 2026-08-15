@@ -24,6 +24,7 @@ using oc::note::sequencer::StepSequencerExpander;
 using oc::note::sequencer::StepSequencerGraph;
 using oc::note::sequencer::StepSequencerGraphLimits;
 using oc::note::sequencer::StepSequencerRuntimeState;
+using oc::note::sequencer::StepSequencerRootStepInput;
 using oc::note::sequencer::StepSequencerScaleConstraintMode;
 using oc::note::sequencer::StepSequencerScaleSettings;
 using oc::note::sequencer::StepSequencerScaleType;
@@ -144,6 +145,98 @@ void test_micro_sequence_expands_inside_parent_step() {
     TEST_ASSERT_EQUAL_UINT8(60, out.notes[0].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(62, out.notes[1].variation.resolved.note);
     TEST_ASSERT_EQUAL_UINT8(64, out.notes[2].variation.resolved.note);
+}
+
+void test_lightweight_root_input_matches_runtime_expansion() {
+    auto state = baseState();
+    auto graph = graphWithRoot();
+    attachSequence(graph, 0, 1, 4, 2);
+    graph.stepNodes[4].flags = STEP_NODE_VELOCITY_OFFSET;
+    graph.stepNodes[4].velocityOffset = -8;
+    graph.stepNodes[5].flags = STEP_NODE_GATE_OFFSET | STEP_NODE_NUDGE_OFFSET;
+    graph.stepNodes[5].gateOffset = 25;
+    graph.stepNodes[5].nudgeOffset = 10;
+
+    const auto runtime = StepSequencerExpander::expandRootStep(
+        state, graph, 0, 3, 8, 17, true);
+    const auto lightweight = StepSequencerExpander::expandRootStep(
+        StepSequencerRootStepInput{
+            .enabled = true,
+            .values = {
+                .note = state.note[0],
+                .velocity = state.velocity[0],
+                .gate = state.gate[0],
+                .nudge = state.nudge[0],
+            },
+            .probability = state.probability[0],
+            .variationRanges = state.variationRanges,
+            .scaleSettings = state.scaleSettings,
+            .pitchFollowsScale = state.pitchFollowsScale,
+            .mode = StepSequencerRootStepInput::Mode::Full,
+        },
+        graph,
+        0,
+        3,
+        8,
+        17,
+        true
+    );
+
+    TEST_ASSERT_EQUAL_UINT8(runtime.count, lightweight.count);
+    for (uint8_t i = 0; i < runtime.count; ++i) {
+        TEST_ASSERT_EQUAL_UINT32(runtime.notes[i].localTick, lightweight.notes[i].localTick);
+        TEST_ASSERT_EQUAL_UINT16(runtime.notes[i].spanTicks, lightweight.notes[i].spanTicks);
+        TEST_ASSERT_EQUAL_UINT8(
+            runtime.notes[i].variation.resolved.velocity,
+            lightweight.notes[i].variation.resolved.velocity);
+        TEST_ASSERT_EQUAL_UINT16(
+            runtime.notes[i].variation.resolved.gate,
+            lightweight.notes[i].variation.resolved.gate);
+        TEST_ASSERT_EQUAL_INT8(
+            runtime.notes[i].variation.resolved.nudge,
+            lightweight.notes[i].variation.resolved.nudge);
+    }
+}
+
+void test_rhythm_only_root_input_keeps_fixed_pitch_and_single_voice() {
+    auto graph = graphWithRoot();
+    graph.stepNodes[0].flags = STEP_NODE_NOTE_OFFSET;
+    graph.stepNodes[0].noteOffset = 12;
+    setLocalChord(graph, 0);
+    attachSequence(graph, 0, 1, 4, 2);
+    for (uint16_t node = 4; node < 6; ++node) {
+        graph.stepNodes[node].flags |= STEP_NODE_NOTE_OFFSET;
+        graph.stepNodes[node].noteOffset = 7;
+        graph.stepNodes[node].localVariation.pitchSemitones = 12;
+        setLocalChord(graph, node);
+    }
+    graph.stepNodes[5].flags |= STEP_NODE_VELOCITY_OFFSET;
+    graph.stepNodes[5].velocityOffset = -16;
+
+    const auto out = StepSequencerExpander::expandRootStep(
+        StepSequencerRootStepInput{
+            .enabled = true,
+            .values = {.note = 36, .velocity = 100, .gate = 100, .nudge = 0},
+            .probability = 100,
+            .variationRanges = {.pitchSemitones = 12},
+            .mode = StepSequencerRootStepInput::Mode::RhythmOnly,
+        },
+        graph,
+        0,
+        0,
+        8,
+        7,
+        true
+    );
+
+    TEST_ASSERT_EQUAL_UINT8(2, out.count);
+    TEST_ASSERT_EQUAL_UINT8(36, out.notes[0].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(36, out.notes[1].variation.resolved.note);
+    TEST_ASSERT_EQUAL_UINT8(100, out.notes[0].variation.resolved.velocity);
+    TEST_ASSERT_EQUAL_UINT8(84, out.notes[1].variation.resolved.velocity);
+    TEST_ASSERT_EQUAL_UINT8(0, out.notes[0].variation.ranges.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[0].chordVoiceCount);
+    TEST_ASSERT_EQUAL_UINT8(1, out.notes[1].chordVoiceCount);
 }
 
 void test_micro_sequence_positive_offset_moves_content_right() {
@@ -1147,6 +1240,8 @@ void test_chromatic_pitch_context_controls_global_and_local_variation() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_micro_sequence_expands_inside_parent_step);
+    RUN_TEST(test_lightweight_root_input_matches_runtime_expansion);
+    RUN_TEST(test_rhythm_only_root_input_keeps_fixed_pitch_and_single_voice);
     RUN_TEST(test_micro_sequence_positive_offset_moves_content_right);
     RUN_TEST(test_micro_sequence_negative_offset_moves_content_left);
     RUN_TEST(test_micro_sequence_uses_effective_parent_gate_span);
