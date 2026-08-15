@@ -12,6 +12,7 @@
 #include <oc/note/sequencer/StepSequencerVariation.hpp>
 
 using oc::note::sequencer::ISequencerEventSink;
+using oc::note::sequencer::BoundedNoteScheduler;
 using oc::note::sequencer::NoteScheduler;
 using oc::note::sequencer::SequencerEvent;
 using oc::note::sequencer::SequencerEventType;
@@ -124,6 +125,55 @@ void test_note_scheduler_tracks_same_pitch_by_channel() {
     TEST_ASSERT_TRUE(scheduler.processUntil(11, sink));
     TEST_ASSERT_EQUAL(2, countType(sink.events, SequencerEventType::NoteOff));
     TEST_ASSERT_EQUAL_UINT8(1, sink.events[3].channel);
+}
+
+void test_retrigger_scheduler_preserves_later_same_note_pair() {
+    BoundedNoteScheduler<8U, 2U> scheduler;
+    MockEventSink sink;
+
+    // A lane can submit a later MicroSequence hit before another lane submits
+    // an earlier hit for the same MIDI voice.
+    TEST_ASSERT_TRUE(scheduler.scheduleRetriggeringNote(8U, 12U, 0U, 60U, 100U));
+    TEST_ASSERT_TRUE(scheduler.scheduleRetriggeringNote(4U, 6U, 0U, 60U, 80U));
+    TEST_ASSERT_EQUAL_UINT32(4U, scheduler.size());
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(4U, sink));
+    TEST_ASSERT_TRUE(scheduler.processUntil(6U, sink));
+    TEST_ASSERT_TRUE(scheduler.processUntil(8U, sink));
+    TEST_ASSERT_TRUE(scheduler.processUntil(12U, sink));
+
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 4U, 60U));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOff, 6U, 60U));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 8U, 60U));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOff, 12U, 60U));
+}
+
+void test_retrigger_scheduler_preserves_manual_safety_off() {
+    BoundedNoteScheduler<8U, 2U> scheduler;
+    MockEventSink sink;
+
+    TEST_ASSERT_TRUE(scheduler.scheduleNoteOff(12U, 0U, 60U));
+    TEST_ASSERT_TRUE(scheduler.scheduleRetriggeringNote(4U, 6U, 0U, 60U, 80U));
+    TEST_ASSERT_EQUAL_UINT32(3U, scheduler.size());
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(12U, sink));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOff, 12U, 60U));
+}
+
+void test_retrigger_scheduler_discards_active_voice_stale_off() {
+    BoundedNoteScheduler<8U, 2U> scheduler;
+    MockEventSink sink;
+
+    TEST_ASSERT_TRUE(scheduler.scheduleRetriggeringNote(0U, 10U, 0U, 60U, 100U));
+    TEST_ASSERT_TRUE(scheduler.processUntil(0U, sink));
+    TEST_ASSERT_TRUE(scheduler.scheduleRetriggeringNote(5U, 7U, 0U, 60U, 80U));
+    TEST_ASSERT_EQUAL_UINT32(2U, scheduler.size());
+
+    TEST_ASSERT_TRUE(scheduler.processUntil(10U, sink));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOff, 5U, 60U));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOn, 5U, 60U));
+    TEST_ASSERT_TRUE(hasEvent(sink.events, SequencerEventType::NoteOff, 7U, 60U));
+    TEST_ASSERT_FALSE(hasEvent(sink.events, SequencerEventType::NoteOff, 10U, 60U));
 }
 
 void test_gate_zero_mutes_note() {
@@ -1338,6 +1388,9 @@ void test_graph_note_budget_publishes_telemetry_and_runtime_diagnostics() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_note_scheduler_tracks_same_pitch_by_channel);
+    RUN_TEST(test_retrigger_scheduler_preserves_later_same_note_pair);
+    RUN_TEST(test_retrigger_scheduler_preserves_manual_safety_off);
+    RUN_TEST(test_retrigger_scheduler_discards_active_voice_stale_off);
     RUN_TEST(test_gate_zero_mutes_note);
     RUN_TEST(test_velocity_zero_is_sent);
     RUN_TEST(test_note_off_follows_gate_percent);
