@@ -20,6 +20,7 @@ struct ResolvedStep {
     // It is retained only so expanded telemetry can report the complete result.
     StepSequencerResolvedVariation patternVariation{};
     bool pitchFollowsScale = true;
+    bool rhythmOnly = false;
     uint16_t childSequenceId = StepSequencerGraphLimits::INVALID_ID;
     uint16_t cycleSetId = StepSequencerGraphLimits::INVALID_ID;
 };
@@ -189,7 +190,7 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     if (node.has(STEP_NODE_ENABLED_OVERRIDE)) {
         out.enabled = node.has(STEP_NODE_ENABLED_VALUE);
     }
-    if (node.has(STEP_NODE_NOTE_OFFSET)) {
+    if (!out.rhythmOnly && node.has(STEP_NODE_NOTE_OFFSET)) {
         out.values.note = applyNoteOffset(
             out.values.note,
             node.noteOffset,
@@ -211,10 +212,14 @@ ResolvedStep applyNode(const ResolvedStep& parent,
     }
     out.localVariation = node.localVariation;
     out.localVariation.clamp();
-    if (node.has(STEP_NODE_CHORD_MODE)) {
+    if (out.rhythmOnly) {
+        out.localVariation.pitchSemitones = 0U;
+        out.chordState = defaultRootChordState();
+        out.inheritedChord = {};
+    } else if (node.has(STEP_NODE_CHORD_MODE)) {
         out.chordState.mode = node.chordMode;
     }
-    if (node.has(STEP_NODE_CHORD_LOCAL)) {
+    if (!out.rhythmOnly && node.has(STEP_NODE_CHORD_LOCAL)) {
         out.chordState.local = node.chordSpec;
     }
     out.chordState.local.clamp();
@@ -625,60 +630,58 @@ void expandStep(const StepSequencerGraph& graph,
     );
 }
 
-}  // namespace
-
-StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencerRuntimeState& state,
-                                                             const StepSequencerGraph& graph,
-                                                             uint8_t rootStepIndex,
-                                                             uint32_t cycleIndex,
-                                                             uint8_t ticksPerStep,
-                                                             uint32_t runSeed,
-                                                             bool triggered) {
+StepSequencerExpansion expandRootStepInput(
+    StepSequencerRootStepInput input,
+    const StepSequencerGraph& graph,
+    uint8_t rootStepIndex,
+    uint32_t cycleIndex,
+    uint8_t ticksPerStep,
+    uint32_t runSeed,
+    bool triggered
+) {
     StepSequencerExpansion out{};
-    if (!graph.enabled || !triggered || rootStepIndex >= StepSequencerRuntimeState::MAX_STEPS) {
+    if (!graph.enabled || !triggered ||
+        rootStepIndex >= StepSequencerRuntimeState::MAX_STEPS) {
         return out;
     }
 
     const auto* root = graph.sequence(graph.rootSequenceId);
-    if (root == nullptr || rootStepIndex >= root->length) {
-        return out;
-    }
+    if (root == nullptr || rootStepIndex >= root->length) return out;
 
     const uint8_t sourceRootIndex =
         normalizeSequenceIndex(rootStepIndex, root->offset, root->length);
-    if (sourceRootIndex >= StepSequencerRuntimeState::MAX_STEPS) {
-        return out;
-    }
+    if (sourceRootIndex >= StepSequencerRuntimeState::MAX_STEPS) return out;
 
     const uint16_t rootNodeId =
         static_cast<uint16_t>(root->firstStepNode + sourceRootIndex);
     const auto* rootNode = graph.stepNode(rootNodeId);
+    input.probability = StepSequencerRuntimeState::clampProbability(
+        input.probability);
+    input.variationRanges.clamp();
+    input.scaleSettings.clamp();
+    const bool rhythmOnly =
+        input.mode == StepSequencerRootStepInput::Mode::RhythmOnly;
+    if (rhythmOnly) input.variationRanges.pitchSemitones = 0U;
 
     ResolvedStep base{
         .nodeId = rootNodeId,
-        .enabled = state.enabledMask.test(sourceRootIndex),
-        .values = StepSequencerStepValues{
-            .note = state.note[sourceRootIndex],
-            .velocity = state.velocity[sourceRootIndex],
-            .gate = state.gate[sourceRootIndex],
-            .nudge = state.nudge[sourceRootIndex],
-        },
-        .probability = StepSequencerRuntimeState::clampProbability(state.probability[sourceRootIndex]),
+        .enabled = input.enabled,
+        .values = input.values,
+        .probability = input.probability,
         .localVariation = {},
         .chordState = defaultRootChordState(),
         .inheritedChord = {},
-        .pitchFollowsScale = state.pitchFollowsScale,
+        .patternVariation = {},
+        .pitchFollowsScale = input.pitchFollowsScale,
+        .rhythmOnly = rhythmOnly,
         .childSequenceId = StepSequencerGraphLimits::INVALID_ID,
         .cycleSetId = StepSequencerGraphLimits::INVALID_ID,
     };
 
-    // Global variation is resolved before graph-local offsets, but it shares
-    // the same visible Pitch Context authority as Note, child offsets and
-    // Chord. A Chromatic Pattern therefore cannot still randomize in degrees.
     base.patternVariation = resolveStepVariation(
         base.values,
-        state.variationRanges,
-        state.scaleSettings,
+        input.variationRanges,
+        input.scaleSettings,
         StepSequencerRuntimeState::MAX_GATE_PERCENT,
         runSeed,
         cycleIndex,
@@ -690,12 +693,7 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
     base.values = base.patternVariation.resolved;
 
     if (rootNode != nullptr) {
-        base = applyNode(
-            base,
-            *rootNode,
-            rootNodeId,
-            state.scaleSettings
-        );
+        base = applyNode(base, *rootNode, rootNodeId, input.scaleSettings);
     }
 
     expandStep(
@@ -704,7 +702,7 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         0,
         ticksPerStep,
         0,
-        state.scaleSettings,
+        input.scaleSettings,
         runSeed,
         cycleIndex,
         cycleIndex,
@@ -714,6 +712,65 @@ StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencer
         out
     );
     return out;
+}
+
+}  // namespace
+
+StepSequencerExpansion StepSequencerExpander::expandRootStep(const StepSequencerRuntimeState& state,
+                                                             const StepSequencerGraph& graph,
+                                                             uint8_t rootStepIndex,
+                                                             uint32_t cycleIndex,
+                                                             uint8_t ticksPerStep,
+                                                             uint32_t runSeed,
+                                                             bool triggered) {
+    const auto* root = graph.sequence(graph.rootSequenceId);
+    if (root == nullptr || rootStepIndex >= root->length) return {};
+    const uint8_t sourceRootIndex =
+        normalizeSequenceIndex(rootStepIndex, root->offset, root->length);
+    if (sourceRootIndex >= StepSequencerRuntimeState::MAX_STEPS) return {};
+
+    return expandRootStepInput(
+        StepSequencerRootStepInput{
+            .enabled = state.enabledMask.test(sourceRootIndex),
+            .values = StepSequencerStepValues{
+                .note = state.note[sourceRootIndex],
+                .velocity = state.velocity[sourceRootIndex],
+                .gate = state.gate[sourceRootIndex],
+                .nudge = state.nudge[sourceRootIndex],
+            },
+            .probability = state.probability[sourceRootIndex],
+            .variationRanges = state.variationRanges,
+            .scaleSettings = state.scaleSettings,
+            .pitchFollowsScale = state.pitchFollowsScale,
+            .mode = StepSequencerRootStepInput::Mode::Full,
+        },
+        graph,
+        rootStepIndex,
+        cycleIndex,
+        ticksPerStep,
+        runSeed,
+        triggered
+    );
+}
+
+StepSequencerExpansion StepSequencerExpander::expandRootStep(
+    const StepSequencerRootStepInput& input,
+    const StepSequencerGraph& graph,
+    uint8_t rootStepIndex,
+    uint32_t cycleIndex,
+    uint8_t ticksPerStep,
+    uint32_t runSeed,
+    bool triggered
+) {
+    return expandRootStepInput(
+        input,
+        graph,
+        rootStepIndex,
+        cycleIndex,
+        ticksPerStep,
+        runSeed,
+        triggered
+    );
 }
 
 FLASHMEM StepSequencerExpansionAnalysis StepSequencerExpander::analyzeRootStep(

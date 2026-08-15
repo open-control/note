@@ -40,6 +40,29 @@ struct StepSequencerExpansionAnalysis {
     bool depthLimitReached = false;
 };
 
+/**
+ * Flat root values used when a product owns its step matrix outside
+ * StepSequencerRuntimeState but still wants the shared MicroSequence/Cycle
+ * traversal.  This keeps the realtime call allocation-free and avoids
+ * materializing a complete 128-step runtime state for one sparse root.
+ */
+struct StepSequencerRootStepInput {
+    enum class Mode : uint8_t {
+        Full = 0,
+        // Keeps timing, enable, probability, velocity, gate and nudge graph
+        // semantics while forcing one fixed MIDI pitch and a single voice.
+        RhythmOnly,
+    };
+
+    bool enabled = false;
+    StepSequencerStepValues values{};
+    uint8_t probability = StepSequencerRuntimeState::DEFAULT_PROBABILITY;
+    StepSequencerVariationRanges variationRanges{};
+    StepSequencerScaleSettings scaleSettings{};
+    bool pitchFollowsScale = true;
+    Mode mode = Mode::Full;
+};
+
 class StepSequencerExpander {
 public:
     static StepSequencerExpansion expandRootStep(const StepSequencerRuntimeState& state,
@@ -49,6 +72,23 @@ public:
                                                  uint8_t ticksPerStep,
                                                  uint32_t runSeed,
                                                  bool triggered);
+
+    /**
+     * Expand one Graph root from a lightweight caller-owned base step.
+     *
+     * `rootStepIndex` still identifies one of the Graph's canonical 128 root
+     * nodes and therefore remains a stable seed identity. No heap allocation
+     * and no StepSequencerRuntimeState-sized temporary is required.
+     */
+    static StepSequencerExpansion expandRootStep(
+        const StepSequencerRootStepInput& input,
+        const StepSequencerGraph& graph,
+        uint8_t rootStepIndex,
+        uint32_t cycleIndex,
+        uint8_t ticksPerStep,
+        uint32_t runSeed,
+        bool triggered
+    );
 
     /**
      * Run the exact expansion traversal without retaining expanded notes.
