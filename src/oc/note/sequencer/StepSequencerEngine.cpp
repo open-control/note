@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <config/PlatformCompat.hpp>
+#include <oc/diagnostics/Performance.hpp>
 
 #include "StepSequencerExpander.hpp"
 
@@ -521,6 +522,7 @@ FLASHMEM void StepSequencerEngine::primeSchedule_() {
 }
 
 void StepSequencerEngine::scheduleStep_(uint32_t playbackOrdinal, uint8_t ticksPerStep) {
+    OC_PERF_SCOPE(perfSchedule, "sequencer.playback-schedule");
     const uint8_t len = patternLength_();
     if (len == 0) return;
 
@@ -644,6 +646,7 @@ FLASHMEM void StepSequencerEngine::publishExpandedVariationTelemetry_(
     uint32_t cycleIndex,
     bool triggered
 ) {
+    OC_PERF_SCOPE(perfPreview, "sequencer.playback-step-preview");
     state_.expandedVariationTelemetry.reset();
     if (graph_ == nullptr ||
         !graph_->enabled ||
@@ -727,6 +730,8 @@ FLASHMEM void StepSequencerEngine::publishCycleVariationTelemetry_(
     uint8_t len,
     const StepBitMask128& triggeredMask
 ) {
+    OC_PERF_SCOPE(perfPreview, "sequencer.playback-cycle-preview");
+    OC_PERF_UNITS(perfPreview, len, cycleIndex);
     state_.cycleVariationTelemetry.reset();
     state_.cycleVariationTelemetry.cycleIndex = cycleIndex;
     state_.cycleVariationTelemetry.ranges = state_.variationRanges;
