@@ -29,13 +29,7 @@ FLASHMEM void StepSequencerState::reset() {
     scaleSettings = {};
     variationRanges = {};
 
-    for (uint8_t i = 0; i < MAX_STEPS; ++i) {
-        note[i] = DEFAULT_NOTE;
-        velocity[i] = DEFAULT_VELOCITY;
-        gate[i] = DEFAULT_GATE_PERCENT;
-        nudge[i] = 0;
-        probability[i] = DEFAULT_PROBABILITY;
-    }
+    resetStepData();
 }
 
 }  // namespace oc::note::sequencer
