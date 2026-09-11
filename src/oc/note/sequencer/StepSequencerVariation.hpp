@@ -30,6 +30,37 @@ struct StepSequencerVariationRanges {
     }
 };
 
+inline StepSequencerVariationRanges combineVariationRanges(StepSequencerVariationRanges global,
+                                                    StepSequencerVariationRanges local) {
+    StepSequencerVariationRanges out{
+        .pitchSemitones = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.pitchSemitones) + local.pitchSemitones,
+                StepSequencerVariationRanges::MAX_PITCH_SEMITONES
+            )
+        ),
+        .velocity = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.velocity) + local.velocity,
+                StepSequencerVariationRanges::MAX_VELOCITY
+            )
+        ),
+        .gatePercent = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.gatePercent) + local.gatePercent,
+                StepSequencerVariationRanges::MAX_GATE_PERCENT
+            )
+        ),
+        .nudge = static_cast<uint8_t>(
+            std::min<uint16_t>(
+                static_cast<uint16_t>(global.nudge) + local.nudge,
+                StepSequencerVariationRanges::MAX_NUDGE
+            )
+        ),
+    };
+    return out;
+}
+
 struct StepSequencerStepValues {
     uint8_t note = 0;
     uint8_t velocity = 0;
@@ -154,6 +185,10 @@ inline uint16_t clampGatePercent(int value, uint16_t maxGatePercent) {
     if (value < 0) return 0;
     if (value > static_cast<int>(maxGatePercent)) return maxGatePercent;
     return static_cast<uint16_t>(value);
+}
+
+inline uint8_t clampProbability(int value) {
+    return static_cast<uint8_t>(std::clamp(value, 0, 100));
 }
 
 inline int8_t clampNudge(int value) {
