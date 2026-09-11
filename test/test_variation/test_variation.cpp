@@ -226,8 +226,29 @@ void test_constrained_scale_mode_uses_pitch_variation_as_scale_degrees() {
     TEST_ASSERT_EQUAL_UINT8(expected, out.scale.outputNote);
 }
 
+void test_combined_ranges_saturate_after_addition_without_wrapping() {
+    const auto combined = oc::note::sequencer::combineVariationRanges(
+        {35, 126, 99, 49}, {2, 2, 2, 2}
+    );
+    TEST_ASSERT_EQUAL_UINT8(36, combined.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(127, combined.velocity);
+    TEST_ASSERT_EQUAL_UINT8(100, combined.gatePercent);
+    TEST_ASSERT_EQUAL_UINT8(50, combined.nudge);
+    const auto oversized = oc::note::sequencer::combineVariationRanges(
+        {255, 255, 255, 255}, {255, 255, 255, 255}
+    );
+    TEST_ASSERT_EQUAL_UINT8(36, oversized.pitchSemitones);
+    TEST_ASSERT_EQUAL_UINT8(127, oversized.velocity);
+    TEST_ASSERT_EQUAL_UINT8(100, oversized.gatePercent);
+    TEST_ASSERT_EQUAL_UINT8(50, oversized.nudge);
+    TEST_ASSERT_EQUAL_UINT8(0, oc::note::sequencer::clampProbability(-32768));
+    TEST_ASSERT_EQUAL_UINT8(73, oc::note::sequencer::clampProbability(73));
+    TEST_ASSERT_EQUAL_UINT8(100, oc::note::sequencer::clampProbability(32767));
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_combined_ranges_saturate_after_addition_without_wrapping);
     RUN_TEST(test_zero_ranges_keep_base_values);
     RUN_TEST(test_deltas_stay_inside_requested_ranges);
     RUN_TEST(test_resolved_values_are_clamped_to_runtime_ranges);

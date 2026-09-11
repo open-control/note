@@ -31,13 +31,6 @@ struct CycleResolution {
     uint32_t variationIdentity = 0;
 };
 
-uint8_t clampMidi7Offset(uint8_t base, int16_t offset) {
-    const int value = static_cast<int>(base) + static_cast<int>(offset);
-    if (value < 0) return 0;
-    if (value > 127) return 127;
-    return static_cast<uint8_t>(value);
-}
-
 uint8_t applyNoteOffset(uint8_t base,
                         int8_t offset,
                         StepSequencerScaleSettings scaleSettings,
@@ -47,39 +40,7 @@ uint8_t applyNoteOffset(uint8_t base,
     if (pitchFollowsScale && scaleSettings.isConstrained()) {
         return moveByScaleDegrees(base, offset, scaleSettings);
     }
-    return clampMidi7Offset(base, offset);
-}
-
-uint16_t clampGateOffset(uint16_t base, int16_t offset) {
-    const int value = static_cast<int>(base) + static_cast<int>(offset);
-    if (value < 0) return 0;
-    if (value > static_cast<int>(StepSequencerRuntimeState::MAX_GATE_PERCENT)) {
-        return StepSequencerRuntimeState::MAX_GATE_PERCENT;
-    }
-    return static_cast<uint16_t>(value);
-}
-
-int8_t clampNudgeOffset(int8_t base, int8_t offset) {
-    const int value = static_cast<int>(base) + static_cast<int>(offset);
-    if (value < -50) return -50;
-    if (value > 50) return 50;
-    return static_cast<int8_t>(value);
-}
-
-uint8_t clampProbabilityOffset(uint8_t base, int16_t offset) {
-    const int value = static_cast<int>(base) + static_cast<int>(offset);
-    if (value < 0) return 0;
-    if (value > 100) return 100;
-    return static_cast<uint8_t>(value);
-}
-
-uint8_t normalizeSequenceIndex(uint8_t playIndex, int8_t offset, uint8_t length) {
-    if (length == 0) return 0;
-    int value = static_cast<int>(playIndex) - static_cast<int>(offset);
-    const int len = static_cast<int>(length);
-    value %= len;
-    if (value < 0) value += len;
-    return static_cast<uint8_t>(value);
+    return clampMidi7(static_cast<int>(base) + offset);
 }
 
 uint32_t boundaryTick(uint8_t playIndex, uint16_t spanTicks, uint8_t length) {
@@ -94,37 +55,6 @@ uint16_t effectiveGateSpan(uint16_t spanTicks, uint16_t gatePercent) {
     if (scaled == 0) return 1;
     if (scaled > UINT16_MAX) return UINT16_MAX;
     return static_cast<uint16_t>(scaled);
-}
-
-StepSequencerVariationRanges combineVariationRanges(StepSequencerVariationRanges global,
-                                                    StepSequencerVariationRanges local) {
-    StepSequencerVariationRanges out{
-        .pitchSemitones = static_cast<uint8_t>(
-            std::min<uint16_t>(
-                static_cast<uint16_t>(global.pitchSemitones) + local.pitchSemitones,
-                StepSequencerVariationRanges::MAX_PITCH_SEMITONES
-            )
-        ),
-        .velocity = static_cast<uint8_t>(
-            std::min<uint16_t>(
-                static_cast<uint16_t>(global.velocity) + local.velocity,
-                StepSequencerVariationRanges::MAX_VELOCITY
-            )
-        ),
-        .gatePercent = static_cast<uint8_t>(
-            std::min<uint16_t>(
-                static_cast<uint16_t>(global.gatePercent) + local.gatePercent,
-                StepSequencerVariationRanges::MAX_GATE_PERCENT
-            )
-        ),
-        .nudge = static_cast<uint8_t>(
-            std::min<uint16_t>(
-                static_cast<uint16_t>(global.nudge) + local.nudge,
-                StepSequencerVariationRanges::MAX_NUDGE
-            )
-        ),
-    };
-    return out;
 }
 
 bool hasAnyVariationRange(const StepSequencerVariationRanges& ranges) {
@@ -199,16 +129,16 @@ ResolvedStep applyNode(const ResolvedStep& parent,
         );
     }
     if (node.has(STEP_NODE_VELOCITY_OFFSET)) {
-        out.values.velocity = clampMidi7Offset(out.values.velocity, node.velocityOffset);
+        out.values.velocity = clampMidi7(static_cast<int>(out.values.velocity) + node.velocityOffset);
     }
     if (node.has(STEP_NODE_GATE_OFFSET)) {
-        out.values.gate = clampGateOffset(out.values.gate, node.gateOffset);
+        out.values.gate = clampGatePercent(static_cast<int>(out.values.gate) + node.gateOffset, StepSequencerRuntimeState::MAX_GATE_PERCENT);
     }
     if (node.has(STEP_NODE_NUDGE_OFFSET)) {
-        out.values.nudge = clampNudgeOffset(out.values.nudge, node.nudgeOffset);
+        out.values.nudge = clampNudge(static_cast<int>(out.values.nudge) + node.nudgeOffset);
     }
     if (node.has(STEP_NODE_PROBABILITY_OFFSET)) {
-        out.probability = clampProbabilityOffset(out.probability, node.probabilityOffset);
+        out.probability = clampProbability(static_cast<int>(out.probability) + node.probabilityOffset);
     }
     out.localVariation = node.localVariation;
     out.localVariation.clamp();

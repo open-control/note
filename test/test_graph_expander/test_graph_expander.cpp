@@ -1237,8 +1237,19 @@ void test_chromatic_pitch_context_controls_global_and_local_variation() {
     TEST_ASSERT_EQUAL_UINT8(2, out.notes[0].variation.ranges.pitchSemitones);
 }
 
+void test_sequence_index_wraps_signed_offsets_and_accepts_empty_sequences() {
+    using oc::note::sequencer::normalizeSequenceIndex;
+    TEST_ASSERT_EQUAL_UINT8(0, normalizeSequenceIndex(255, -128, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, normalizeSequenceIndex(255, 127, 1));
+    TEST_ASSERT_EQUAL_UINT8(3, normalizeSequenceIndex(0, 1, 4));
+    TEST_ASSERT_EQUAL_UINT8(1, normalizeSequenceIndex(0, -1, 4));
+    TEST_ASSERT_EQUAL_UINT8(3, normalizeSequenceIndex(255, -128, 4));
+    TEST_ASSERT_EQUAL_UINT8(128, normalizeSequenceIndex(255, -128, 255));
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_sequence_index_wraps_signed_offsets_and_accepts_empty_sequences);
     RUN_TEST(test_micro_sequence_expands_inside_parent_step);
     RUN_TEST(test_lightweight_root_input_matches_runtime_expansion);
     RUN_TEST(test_rhythm_only_root_input_keeps_fixed_pitch_and_single_voice);

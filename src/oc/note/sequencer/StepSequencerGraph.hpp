@@ -18,6 +18,16 @@ struct StepSequencerGraphLimits {
     static constexpr uint16_t INVALID_ID = 0xFFFFU;
 };
 
+// Map playback position to source position; an empty sequence has index zero.
+inline uint8_t normalizeSequenceIndex(uint8_t playIndex, int8_t offset, uint8_t length) {
+    if (length == 0) return 0;
+    int value = static_cast<int>(playIndex) - static_cast<int>(offset);
+    const int len = static_cast<int>(length);
+    value %= len;
+    if (value < 0) value += len;
+    return static_cast<uint8_t>(value);
+}
+
 enum class StepSequencerSequenceKind : uint8_t {
     RootPattern = 0,
     MicroSequence,
