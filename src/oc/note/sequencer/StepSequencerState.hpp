@@ -1,11 +1,11 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include <oc/state/Signal.hpp>
 
 #include "StepBitMask128.hpp"
+#include "StepSequencerStepData.hpp"
 #include "StepSequencerScale.hpp"
 #include "StepSequencerVariation.hpp"
 
@@ -21,17 +21,11 @@ using oc::state::Signal;
  * - Engine-friendly (arrays + masks for fast access)
  * - Settings-ready (explicit defaults, no magic numbers)
  */
-struct StepSequencerState {
-    static constexpr uint8_t MAX_STEPS = 128;
-    static constexpr uint16_t MAX_GATE_PERCENT = 1600;
+struct StepSequencerState : StepSequencerStepData {
 
     // Defaults
     static constexpr uint8_t DEFAULT_LENGTH = 8;
     static constexpr uint8_t DEFAULT_STEPS_PER_BEAT = 4;  // 1/16
-    static constexpr uint8_t DEFAULT_NOTE = 48;  // C3
-    static constexpr uint8_t DEFAULT_VELOCITY = 64;
-    static constexpr uint16_t DEFAULT_GATE_PERCENT = 100;
-    static constexpr uint8_t DEFAULT_PROBABILITY = 100;
 
     StepSequencerState();
 
@@ -48,12 +42,6 @@ struct StepSequencerState {
     StepBitMask128 probabilityCycleMask{};
     uint32_t probabilityCycleIndex = 0;
 
-    // Step properties
-    std::array<uint8_t, MAX_STEPS> note{};         // MIDI note number 0..127
-    std::array<uint8_t, MAX_STEPS> velocity{};     // 0..127 (0 is valid)
-    std::array<uint16_t, MAX_STEPS> gate{};        // percent (0..MAX_GATE_PERCENT)
-    std::array<int8_t, MAX_STEPS> nudge{};         // -50..50
-    std::array<uint8_t, MAX_STEPS> probability{};  // percent 0..100
     StepSequencerScaleSettings scaleSettings{};
     StepSequencerVariationRanges variationRanges{};
 
